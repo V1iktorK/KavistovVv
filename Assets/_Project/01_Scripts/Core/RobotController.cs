@@ -24,10 +24,16 @@ public abstract class RobotController : MonoBehaviour
     public virtual void SetActive(bool active)
     {
         isActive = active;
-        // Визуальное выделение: меняем цвет материала
-        var renderer = GetComponentInChildren<Renderer>();
-        if (renderer != null)
-            renderer.material.color = active ? Color.green : Color.white;
+        foreach (var rend in GetComponentsInChildren<Renderer>(true))
+        {
+            // Сохраняем оригинальный цвет при первом вызове
+            // Для MVP — просто включаем/выключаем Emission
+            if (rend.material.HasProperty("_EmissionColor"))
+            {
+                rend.material.SetColor("_EmissionColor", active ? Color.green * 0.3f : Color.black);
+                rend.material.EnableKeyword("_EMISSION");
+            }
+        }
     }
     
     public virtual void UpdateTelemetry(float deltaTime)

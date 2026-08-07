@@ -67,5 +67,10 @@ public class SettingsData : ScriptableObject
     public bool autoSaveTrajectory = false;
     public bool showTutorialOnStart = true;
     
-    void OnEnable() => Instance = this;
+    void OnEnable()
+{
+    // Защита от перезаписи временными объектами
+    if (Instance == null || Instance == this)
+        Instance = this;
+}
 }

@@ -14,9 +14,12 @@ public class TargetMarker : MonoBehaviour
         rend = GetComponent<Renderer>();
         if (rend == null)
         {
+            var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            var mesh = sphere.GetComponent<MeshFilter>().sharedMesh;
+            Destroy(sphere); // уничтожаем временный объект, меш остаётся в памяти
+        
+            gameObject.AddComponent<MeshFilter>().sharedMesh = mesh;
             rend = gameObject.AddComponent<MeshRenderer>();
-            var f = gameObject.AddComponent<MeshFilter>();
-            f.mesh = Resources.GetBuiltinResource<Mesh>("Sphere.fbx");
             rend.material = new Material(Shader.Find("Standard"));
         }
     }

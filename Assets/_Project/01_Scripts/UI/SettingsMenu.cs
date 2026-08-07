@@ -60,8 +60,13 @@ public class SettingsMenu : MonoBehaviour
         ShowTab(0); // Показать первую вкладку
     }
     
+    private bool uiInitialized = false;
+
     void SetupUI()
-    {
+        {
+        if (uiInitialized) return;
+        uiInitialized = true;
+        
         // Ввод
         inputDeviceDropdown.value = (int)settings.preferredDevice;
         inputDeviceDropdown.onValueChanged.AddListener(v => {
@@ -160,6 +165,7 @@ public class SettingsMenu : MonoBehaviour
         
         tutorialToggle.isOn = settings.showTutorialOnStart;
         tutorialToggle.onValueChanged.AddListener(v => settings.showTutorialOnStart = v);
+        
     }
     
     public void ShowTab(int index)

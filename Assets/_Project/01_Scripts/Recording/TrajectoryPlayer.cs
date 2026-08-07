@@ -15,12 +15,19 @@ public class TrajectoryPlayer : MonoBehaviour
     [Header("Playback")]
     public bool loop = false;
     public float timeScale = 1f;
-    
-    public void Play()
+
+    void Update()
     {
+        if (InputManager.Instance != null && InputManager.Instance.PlayDown && !isPlaying)
+        Play();
+    }
+    
+        public void Play()
+    {
+        if (isPlaying) return; // <-- добавь
         trajectory = recorder.GetTrajectory();
         if (trajectory == null || trajectory.Count < 2) return;
-        
+
         isPlaying = true;
         currentIndex = 0;
         playStartTime = Time.time;

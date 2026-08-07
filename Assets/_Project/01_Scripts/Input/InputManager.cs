@@ -94,6 +94,10 @@ public class InputManager : MonoBehaviour
     public bool SelectDown => activeProvider?.GetSelectDown() ?? false;
     public bool GrabDown => activeProvider?.GetGrabDown() ?? false;
     public bool SwitchRobotDown => activeProvider?.GetSwitchRobotDown() ?? false;
+    public bool RecordDown => activeProvider?.GetRecordDown() ?? false;
+    public bool PlayDown => activeProvider?.GetPlayDown() ?? false;
+    public bool SelectHeld => activeProvider?.GetSelectHeld() ?? false;
+    public bool GrabHeld => activeProvider?.GetGrabHeld() ?? false;
     
     // Добавьте остальные по необходимости
 }

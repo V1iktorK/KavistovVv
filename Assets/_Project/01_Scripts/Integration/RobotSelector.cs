@@ -16,7 +16,8 @@ public class RobotSelector : MonoBehaviour
     
     void Update()
     {
-        if (InputManager.Instance != null && InputManager.Instance.SwitchRobotDown)
+        if (robots == null || robots.Length == 0 || InputManager.Instance == null) return;
+        if (InputManager.Instance.SwitchRobotDown)
         {
             robots[activeIndex].SetActive(false);
             activeIndex = (activeIndex + 1) % robots.Length;

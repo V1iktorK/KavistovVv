@@ -2,13 +2,6 @@
 <xs:schema xmlns:tns="UnityEngine.UIElements" elementFormDefault="qualified" targetNamespace="UnityEngine.UIElements" xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:import schemaLocation="Unity.UIToolkit.Editor.xsd" namespace="Unity.UIToolkit.Editor" />
   <xs:import schemaLocation="UnityEngine.xsd" namespace="UnityEngine" />
-  <xs:complexType name="ImmediateModeElementType">
-    <xs:complexContent mixed="false">
-      <xs:extension base="tns:VisualElementType">
-        <xs:choice />
-      </xs:extension>
-    </xs:complexContent>
-  </xs:complexType>
   <xs:complexType name="VisualElementType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element minOccurs="0" maxOccurs="1" form="unqualified" name="Bindings" type="tns:VisualElementBindingsType" />
@@ -69,7 +62,6 @@
     </xs:complexContent>
   </xs:complexType>
   <xs:element name="VisualElement" type="tns:VisualElementType" />
-  <xs:element name="ImmediateModeElement" substitutionGroup="tns:VisualElement" type="tns:ImmediateModeElementType" />
   <xs:complexType name="BindableElementType">
     <xs:complexContent mixed="false">
       <xs:extension base="tns:VisualElementType">
@@ -122,6 +114,14 @@
     </xs:complexContent>
   </xs:complexType>
   <xs:element name="DropdownField" substitutionGroup="tns:BindableElement" type="tns:DropdownFieldType" />
+  <xs:complexType name="ImmediateModeElementType">
+    <xs:complexContent mixed="false">
+      <xs:extension base="tns:VisualElementType">
+        <xs:choice />
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="ImmediateModeElement" substitutionGroup="tns:VisualElement" type="tns:ImmediateModeElementType" />
   <xs:complexType name="ButtonType">
     <xs:complexContent mixed="false">
       <xs:extension base="tns:TextElementType">

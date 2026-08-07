@@ -5,9 +5,9 @@ public class CollisionGuard : MonoBehaviour
     public RobotController robot;
     public LayerMask obstacleLayers;    // Стол, стены, другие роботы
     
-    public bool CanMoveTo(Vector3 targetPos)
+        public bool CanMoveTo(Vector3 targetPos)
     {
-        // Проверяем, нет ли препятствия на пути
+        if (robot == null || robot.tcp == null) return true; // нет данных — пропускаем
         Vector3 direction = targetPos - robot.tcp.position;
         float distance = direction.magnitude;
         
