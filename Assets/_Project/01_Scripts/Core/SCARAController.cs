@@ -2,66 +2,186 @@ using UnityEngine;
 
 public class SCARAController : RobotController
 {
-    [Header("SCARA Joints")]
+    [Header("LS10 planar joints")]
     public Transform joint1;
     public Transform joint2;
-    public Transform joint3; // Prismatic Z
-    public Transform joint4; // Tool rotation
-    
-    [Header("Dimensions")]
-    public float L1 = 0.4f;
-    public float L2 = 0.3f;
-    public float ZBase = 0.5f;
-    public float ZMin = 0f;
+    public Transform joint3; // LS10-B702S_z_5, prismatic Z axis
+    public Transform baseTransform;
+
+    [SerializeField] private string baseName = "LS10-B702S_base_1";
+    [SerializeField] private string joint1Name = "LS10-B702S_J1_3";
+    [SerializeField] private string joint2Name = "LS10-B702S_J2_4";
+    [SerializeField] private string joint3Name = "LS10-B702S_z_5";
+
+    [Header("Vertical travel")]
+    public float ZMin = -0.3f;
     public float ZMax = 0.3f;
-    
-    void Update()
+
+    private Vector3 verticalAxis;
+    private float initialHeight;
+    private bool geometryCached;
+    private bool referencesReported;
+
+    protected override void Awake()
+    {
+        base.Awake();
+        ResolveJoints();
+        CacheGeometry();
+    }
+
+    private void Update()
     {
         MoveToTarget(Time.deltaTime);
         UpdateTelemetry(Time.deltaTime);
     }
-    
+
     public override void SetTarget(Vector3 position, Quaternion? rotation = null)
     {
         targetPosition = position;
         targetRotation = rotation ?? Quaternion.identity;
         hasTarget = true;
     }
-    
+
     public override void MoveToTarget(float deltaTime)
     {
-        base.MoveToTarget(deltaTime);
-        float x = targetPosition.x - transform.position.x;
-        float y = targetPosition.z - transform.position.z;
-        float z = targetPosition.y - transform.position.y;
-        
-        float r = Mathf.Sqrt(x * x + y * y);
-        float cosTheta2 = Mathf.Clamp((r * r - L1 * L1 - L2 * L2) / (2 * L1 * L2), -1f, 1f);
-        float theta2 = Mathf.Acos(cosTheta2);
-        float theta1 = Mathf.Atan2(y, x) - Mathf.Atan2(L2 * Mathf.Sin(theta2), L1 + L2 * Mathf.Cos(theta2));
-        float d3 = Mathf.Clamp(z - ZBase, ZMin, ZMax);
-        float theta4 = targetRotation.eulerAngles.y - (theta1 + theta2) * Mathf.Rad2Deg;
-        
-        float speed = maxSpeed * (SettingsData.Instance?.robotSpeed ?? 1f) * deltaTime * 5f;
-        
-        if (joint1 != null)
-            joint1.localRotation = Quaternion.Slerp(joint1.localRotation, Quaternion.Euler(0, theta1 * Mathf.Rad2Deg, 0), speed);
-        if (joint2 != null)
-            joint2.localRotation = Quaternion.Slerp(joint2.localRotation, Quaternion.Euler(0, theta2 * Mathf.Rad2Deg, 0), speed);
-        if (joint3 != null)
-            joint3.localPosition = Vector3.Lerp(joint3.localPosition, new Vector3(0, d3, 0), speed);
-        if (joint4 != null)
-            joint4.localRotation = Quaternion.Slerp(joint4.localRotation, Quaternion.Euler(0, theta4, 0), speed);
+        if (!hasTarget) return;
+
+        ResolveJoints();
+        Transform resolvedBase = baseTransform != null ? baseTransform : FindChild(baseName);
+        Transform resolvedJoint1 = joint1 != null ? joint1 : FindChild(joint1Name, "J1");
+        Transform resolvedJoint2 = joint2 != null ? joint2 : FindChild(joint2Name, "J2");
+        Transform resolvedJoint3 = joint3 != null ? joint3 : FindChild(joint3Name, "_z_", "z_5");
+
+        if (resolvedBase == null || resolvedJoint1 == null || resolvedJoint2 == null || resolvedJoint3 == null)
+        {
+            if (!referencesReported)
+            {
+                Debug.LogError(
+                    $"[{name}] SCARA references missing. Assign base, J1, J2 and Z joints in the Inspector.",
+                    this);
+                referencesReported = true;
+            }
+            return;
+        }
+        baseTransform = resolvedBase;
+        joint1 = resolvedJoint1;
+        joint2 = resolvedJoint2;
+        joint3 = resolvedJoint3;
+        if (!referencesReported)
+        {
+            Debug.Log($"[{name}] SCARA joints resolved.", this);
+            referencesReported = true;
+        }
+        if (!geometryCached)
+        {
+            CacheGeometry();
+        }
+
+        Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : baseTransform.up;
+        Vector3 basePosition = baseTransform.position;
+        float speed = Mathf.Clamp01(maxSpeed * (SettingsData.Instance?.robotSpeed ?? 1f) * deltaTime * 5f);
+
+        Vector3 planarTarget = basePosition + Vector3.ProjectOnPlane(targetPosition - basePosition, axis);
+        for (int iteration = 0; iteration < 4; iteration++)
+        {
+            RotateAroundAxisTowards(
+                joint2,
+                joint3.position - joint2.position,
+                planarTarget - joint2.position,
+                axis,
+                speed);
+            RotateAroundAxisTowards(
+                joint1,
+                joint3.position - joint1.position,
+                planarTarget - joint1.position,
+                axis,
+                speed);
+        }
+
+        float currentHeight = Vector3.Dot(joint3.position - basePosition, axis);
+        float targetHeight = Vector3.Dot(targetPosition - basePosition, axis);
+        float desiredHeight = Mathf.Clamp(targetHeight, initialHeight + ZMin, initialHeight + ZMax);
+        float heightOffset = Mathf.Clamp(desiredHeight - currentHeight, -ZMax, ZMax);
+        Vector3 desiredZPosition = joint3.position + axis * heightOffset;
+        Transform parent = joint3.parent;
+        if (parent != null)
+        {
+            joint3.localPosition = Vector3.Lerp(
+                joint3.localPosition,
+                parent.InverseTransformPoint(desiredZPosition),
+                speed);
+        }
     }
-    
+
+    private void ResolveJoints()
+    {
+        if (baseTransform == null)
+        {
+            baseTransform = FindChild(baseName);
+        }
+
+        if (baseTransform == null)
+        {
+            baseTransform = transform;
+        }
+
+        if (joint1 == null) joint1 = FindChild(joint1Name, "J1");
+        if (joint2 == null) joint2 = FindChild(joint2Name, "J2");
+        if (joint3 == null) joint3 = FindChild(joint3Name, "_z_", "z_5");
+
+        if (verticalAxis.sqrMagnitude < 0.001f && baseTransform != null)
+        {
+            verticalAxis = baseTransform.up;
+        }
+    }
+
+    private void CacheGeometry()
+    {
+        if (baseTransform == null || joint1 == null || joint2 == null || joint3 == null) return;
+
+        initialHeight = Vector3.Dot(joint3.position - baseTransform.position, verticalAxis);
+        geometryCached = true;
+    }
+
+    private static void RotateAroundAxisTowards(
+        Transform joint,
+        Vector3 currentDirection,
+        Vector3 desiredDirection,
+        Vector3 axis,
+        float amount)
+    {
+        currentDirection = Vector3.ProjectOnPlane(currentDirection, axis);
+        desiredDirection = Vector3.ProjectOnPlane(desiredDirection, axis);
+        if (joint == null || currentDirection.sqrMagnitude < 0.001f || desiredDirection.sqrMagnitude < 0.001f) return;
+
+        float angle = Vector3.SignedAngle(currentDirection, desiredDirection, axis);
+        joint.Rotate(axis, angle * amount, Space.World);
+    }
+
+    private Transform FindChild(params string[] names)
+    {
+        foreach (Transform child in GetComponentsInChildren<Transform>(true))
+        {
+            foreach (string objectName in names)
+            {
+                if (child.name == objectName ||
+                    child.name.IndexOf(objectName, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return child;
+                }
+            }
+        }
+
+        return null;
+    }
+
     public override float[] GetJointAngles()
     {
-        return new float[]
+        return new[]
         {
             joint1 ? joint1.localEulerAngles.y : 0f,
             joint2 ? joint2.localEulerAngles.y : 0f,
-            joint3 ? joint3.localPosition.y : 0f,
-            joint4 ? joint4.localEulerAngles.y : 0f
+            joint3 ? joint3.localPosition.y : 0f
         };
     }
 }

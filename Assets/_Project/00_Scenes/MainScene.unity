@@ -834,7 +834,7 @@ MonoBehaviour:
   laserHandOffset: 0.35
   laserLayers:
     serializedVersion: 2
-    m_Bits: 4294967291
+    m_Bits: 1073741875
 --- !u!1 &428515266
 GameObject:
   m_ObjectHideFlags: 0
@@ -2999,6 +2999,13 @@ MonoBehaviour:
   telemetryEnabled: 1
   jointTemperature: 25
   operatingHours: 0
+  fixedBase: {fileID: 0}
+  endEffector: {fileID: 0}
+  fixedBaseName: LS10-B702S_base_1
+  endEffectorName: Axis6_2
+  alternativeEndEffectorName: LS10-B702S_z_5
+  ikIterations: 12
+  ikTolerance: 0.01
 --- !u!114 &1387993597
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3255,14 +3262,22 @@ MonoBehaviour:
   telemetryEnabled: 1
   jointTemperature: 25
   operatingHours: 0
+  fixedBase: {fileID: 0}
+  endEffector: {fileID: 0}
+  fixedBaseName: LS10-B702S_base_1
+  endEffectorName: Axis6_2
+  alternativeEndEffectorName: LS10-B702S_z_5
+  ikIterations: 12
+  ikTolerance: 0.01
   joint1: {fileID: 0}
   joint2: {fileID: 0}
   joint3: {fileID: 0}
-  joint4: {fileID: 0}
-  L1: 0.4
-  L2: 0.3
-  ZBase: 0.5
-  ZMin: 0
+  baseTransform: {fileID: 0}
+  baseName: LS10-B702S_base_1
+  joint1Name: LS10-B702S_J1_3
+  joint2Name: LS10-B702S_J2_4
+  joint3Name: LS10-B702S_z_5
+  ZMin: -0.3
   ZMax: 0.3
 --- !u!1 &1627769934
 GameObject:

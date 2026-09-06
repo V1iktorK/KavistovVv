@@ -59,13 +59,30 @@ public class FreeFlyCameraController : MonoBehaviour
 
     private bool IsMouseButtonPressed(int button)
     {
+        try
+        {
+            if (Input.GetMouseButton(button))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
         if (Mouse.current != null)
         {
             switch (button)
             {
-                case 0: return Mouse.current.leftButton.isPressed;
-                case 1: return Mouse.current.rightButton.isPressed;
-                case 2: return Mouse.current.middleButton.isPressed;
+                case 0:
+                    if (Mouse.current.leftButton.isPressed) return true;
+                    break;
+                case 1:
+                    if (Mouse.current.rightButton.isPressed) return true;
+                    break;
+                case 2:
+                    if (Mouse.current.middleButton.isPressed) return true;
+                    break;
             }
         }
 
@@ -81,19 +98,21 @@ public class FreeFlyCameraController : MonoBehaviour
 
     private Vector2 ReadMouseDelta()
     {
-        if (Mouse.current != null)
-        {
-            return Mouse.current.delta.ReadValue() * lookSensitivity;
-        }
-
         try
         {
-            return new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")) * lookSensitivity;
+            Vector2 legacyDelta = new Vector2(Input.GetAxisRaw("Mouse X"), Input.GetAxisRaw("Mouse Y"));
+            if (legacyDelta.sqrMagnitude > 0f)
+            {
+                return legacyDelta * lookSensitivity;
+            }
         }
         catch
         {
-            return Vector2.zero;
         }
+
+        return Mouse.current != null
+            ? Mouse.current.delta.ReadValue() * lookSensitivity
+            : Vector2.zero;
     }
 
     void Awake()
@@ -128,12 +147,26 @@ public class FreeFlyCameraController : MonoBehaviour
         yaw = transform.eulerAngles.y;
         pitch = transform.eulerAngles.x;
 
-        if (lockCursorOnStart)
+        if (lockCursorOnStart && Application.isFocused)
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
         }
         else
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (hasFocus && lockCursorOnStart)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
+        else if (!hasFocus)
         {
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
@@ -162,8 +195,15 @@ public class FreeFlyCameraController : MonoBehaviour
             }
         }
 
-        if (IsMouseButtonPressed(1))
+        bool rightMouseHeld = IsMouseButtonPressed(1);
+        if (rightMouseHeld)
         {
+            if (Cursor.lockState != CursorLockMode.Locked)
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
+
             Vector2 delta = ReadMouseDelta();
             float mouseX = delta.x;
             float mouseY = delta.y * (invertY ? 1f : -1f);
@@ -205,34 +245,89 @@ public class FreeFlyCameraController : MonoBehaviour
         Vector3 direction = transform.forward;
         Vector3 endpoint = origin + direction * laserLength;
 
-        if (Physics.Raycast(origin, direction, out RaycastHit hit, laserLength, laserLayers, QueryTriggerInteraction.Ignore))
+        bool hasHit = Physics.Raycast(
+            origin,
+            direction,
+            out RaycastHit hit,
+            laserLength,
+            laserLayers,
+            QueryTriggerInteraction.Ignore);
+        if (hasHit)
         {
             endpoint = hit.point;
-            if (IsMouseButtonPressed(0) && !primaryButtonWasPressed)
+        }
+        else
+        {
+            Plane workPlane = new Plane(Vector3.up, Vector3.zero);
+            if (workPlane.Raycast(new Ray(origin, direction), out float planeDistance) &&
+                planeDistance >= 0f && planeDistance <= laserLength)
+            {
+                endpoint = origin + direction * planeDistance;
+            }
+        }
+
+        if (IsMouseButtonPressed(0) && !primaryButtonWasPressed)
+        {
+            RobotController selectedRobot = hasHit
+                ? FindPreferredRobotController(hit.collider.transform)
+                : null;
+            if (selectedRobot == null)
+            {
+                selectedRobot = FindRobotNearRay(origin, direction, laserLength);
+            }
+            if (selectedRobot == null)
             {
                 RobotController[] robots = FindObjectsByType<RobotController>(FindObjectsSortMode.None);
-                RobotController selectedRobot = null;
-                float closestDistance = float.PositiveInfinity;
-                foreach (RobotController robot in robots)
+                if (robots.Length > 0)
                 {
-                    float distance = Vector3.Distance(robot.transform.position, hit.point);
-                    if (distance < closestDistance)
-                    {
-                        closestDistance = distance;
-                        selectedRobot = robot;
-                    }
+                    selectedRobot = robots[0];
                 }
+            }
 
-                if (selectedRobot != null)
-                {
-                    selectedRobot.SetActive(true);
-                    selectedRobot.SetTarget(hit.point, Quaternion.LookRotation(transform.forward, Vector3.up));
-                }
+            if (selectedRobot != null)
+            {
+                selectedRobot.SetActive(true);
+                selectedRobot.SetTarget(endpoint, Quaternion.LookRotation(transform.forward, Vector3.up));
+                Debug.Log($"[DesktopTeleoperation] Target {endpoint} assigned to {selectedRobot.name}.");
             }
         }
 
         laser.SetPosition(0, origin);
         laser.SetPosition(1, endpoint);
         primaryButtonWasPressed = IsMouseButtonPressed(0);
+    }
+
+    private static RobotController FindRobotNearRay(Vector3 origin, Vector3 direction, float maxDistance)
+    {
+        RobotController closestRobot = null;
+        float closestRayDistance = float.PositiveInfinity;
+        foreach (RobotController candidate in FindObjectsByType<RobotController>(FindObjectsSortMode.None))
+        {
+            RobotController robot = FindPreferredRobotController(candidate.transform);
+            if (robot == null || robot != candidate && candidate is SCARAController) continue;
+            Vector3 toRobot = robot.transform.position - origin;
+            float rayDistance = Vector3.Dot(toRobot, direction);
+            if (rayDistance < 0f || rayDistance > maxDistance) continue;
+
+            float perpendicularDistance = Vector3.Cross(direction, toRobot).magnitude;
+            if (perpendicularDistance < closestRayDistance)
+            {
+                closestRayDistance = perpendicularDistance;
+                closestRobot = robot;
+            }
+        }
+
+        return closestRobot;
+    }
+
+    private static RobotController FindPreferredRobotController(Transform source)
+    {
+        SCARAController scara = source.GetComponentInParent<SCARAController>();
+        if (scara != null) return scara;
+
+        SixAxisController sixAxis = source.GetComponentInParent<SixAxisController>();
+        if (sixAxis != null) return sixAxis;
+
+        return source.GetComponentInParent<RobotController>();
     }
 }
