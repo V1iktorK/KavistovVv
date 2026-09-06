@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2b76bcf034ab49e4a8cd30239a716460, type: 3}
   m_Name: MetaXRAcousticSettings
   m_EditorClassIdentifier: Meta.XR.Audio::MetaXRAcousticSettings
-  acousticModel: -1
+  acousticModel: 0
   diffractionEnabled: 1
   excludeTags: []
   mapBakeWriteGeo: 1

@@ -8,8 +8,10 @@ public class SpatialAnchorManager : MonoBehaviour
     public Transform robotRoot;
     public GameObject placementIndicator;
     
+    #pragma warning disable CS0414
     private bool isPlaced = false;
-    
+    #pragma warning disable CS0414
+
     void Awake() => Instance = this;
     
     public void PlaceRobot(Vector3 position, Quaternion rotation)

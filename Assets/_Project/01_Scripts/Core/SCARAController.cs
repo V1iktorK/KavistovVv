@@ -25,10 +25,12 @@ public class SCARAController : RobotController
     {
         targetPosition = position;
         targetRotation = rotation ?? Quaternion.identity;
+        hasTarget = true;
     }
     
     public override void MoveToTarget(float deltaTime)
     {
+        base.MoveToTarget(deltaTime);
         float x = targetPosition.x - transform.position.x;
         float y = targetPosition.z - transform.position.z;
         float z = targetPosition.y - transform.position.y;

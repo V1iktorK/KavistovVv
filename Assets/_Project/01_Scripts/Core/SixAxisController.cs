@@ -16,6 +16,7 @@ public class SixAxisController : RobotController
     {
         targetPosition = position;
         targetRotation = rotation ?? Quaternion.identity;
+        hasTarget = true;
         if (ik != null && ik.target != null)
         {
             ik.target.position = targetPosition;
@@ -25,7 +26,7 @@ public class SixAxisController : RobotController
     
     public override void MoveToTarget(float deltaTime)
     {
-        // IK работает в своём компоненте, здесь можно добавить плавность
+        base.MoveToTarget(deltaTime);
     }
     
     public override float[] GetJointAngles()

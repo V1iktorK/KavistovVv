@@ -1,31 +1,20 @@
-// VRInputProvider.cs
 using UnityEngine;
 
+// VR input is intentionally unavailable in the desktop-only configuration.
 public class VRInputProvider : InputProvider
 {
-    public Transform rightController;
-    public Transform leftController;
-    
-    public override Vector3 GetPointerPosition() => rightController.position;
-    public override Vector3 GetPointerDirection() => rightController.forward;
-    
-    public override bool GetSelectDown() => OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger);
-    public override bool GetSelectHeld() => OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger);
-    public override bool GetGrabDown() => OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger);
-    public override bool GetGrabHeld() => OVRInput.Get(OVRInput.Button.PrimaryHandTrigger);
-    public override bool GetSwitchRobotDown() => OVRInput.GetDown(OVRInput.Button.One);
-    public override bool GetRecordDown() => OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger);
-    public override bool GetPlayDown() => OVRInput.GetDown(OVRInput.Button.Two);
-    
-    public override Vector2 GetMovement()
-    {
-        return OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
-    }
-    
-    public override Vector2 GetRotation()
-    {
-        return OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
-    }
-    
-    public override bool IsAvailable() => OVRInput.IsControllerConnected(OVRInput.Controller.Touch);
+    public override Vector3 GetPointerPosition() =>
+        Camera.main != null ? Camera.main.transform.position : Vector3.zero;
+
+    public override Vector3 GetPointerDirection() =>
+        Camera.main != null ? Camera.main.transform.forward : Vector3.forward;
+
+    public override bool GetSelectDown() => false;
+    public override bool GetGrabDown() => false;
+    public override bool GetSwitchRobotDown() => false;
+    public override bool GetRecordDown() => false;
+    public override bool GetPlayDown() => false;
+    public override Vector2 GetMovement() => Vector2.zero;
+    public override Vector2 GetRotation() => Vector2.zero;
+    public override bool IsAvailable() => false;
 }
