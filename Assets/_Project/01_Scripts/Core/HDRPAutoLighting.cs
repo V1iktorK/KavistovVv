@@ -47,29 +47,21 @@ public class HDRPAutoLighting : MonoBehaviour
         {
             if (light.type != LightType.Directional) continue;
             
-            var hdLight = light.GetComponent<HDAdditionalLightData>();
-            if (hdLight == null)
-            {
-                hdLight = light.gameObject.AddComponent<HDAdditionalLightData>();
-            }
-
-            // Переключаем в Lux
-            hdLight.lightUnit = LightUnit.Lux;
-            hdLight.intensity = mainLightIntensity;
-            
-            // Тёплый белый цвет
+            // Настройка через Light компонент (актуальный API)
             light.color = new Color(1f, 0.95f, 0.88f);
+            light.intensity = mainLightIntensity;
+            light.lightUnit = LightUnit.Lux;
             
-            // Усиливаем тени
-            hdLight.shadowsDimmer = 1f;
-            hdLight.castShadows = true;
-            hdLight.shadowCastMode = LightShadowCastMode.Oneside;
+            // Настройка теней
+            light.shadows = LightShadows.SuperHard;
+            light.shadowDimmer = 1f;
+            light.shadowCastMode = LightShadowCastMode.Oneside;
             
             // Bounce light для отражений
-            hdLight.bounceIntensity = 1.5f;
+            light.bounceIntensity = 1.5f;
             
             // Увеличиваем радиус для volumetric effects
-            hdLight.volumetricDimmer = 2.0f;
+            light.volumetricDimmer = 2.0f;
             
             Debug.Log($"[HDRPAutoLighting] Fixed Directional Light: {light.gameObject.name} -> {mainLightIntensity} Lux");
             return;
@@ -85,15 +77,13 @@ public class HDRPAutoLighting : MonoBehaviour
         Light light = go.AddComponent<Light>();
         light.type = LightType.Directional;
         light.color = new Color(1f, 0.95f, 0.88f);
-        
-        var hdLight = go.AddComponent<HDAdditionalLightData>();
-        hdLight.lightUnit = LightUnit.Lux;
-        hdLight.intensity = mainLightIntensity;
-        hdLight.shadowsDimmer = 1f;
-        hdLight.castShadows = true;
-        hdLight.shadowCastMode = LightShadowCastMode.Oneside;
-        hdLight.bounceIntensity = 1.5f;
-        hdLight.volumetricDimmer = 2.0f;
+        light.intensity = mainLightIntensity;
+        light.lightUnit = LightUnit.Lux;
+        light.shadows = LightShadows.SuperHard;
+        light.shadowDimmer = 1f;
+        light.shadowCastMode = LightShadowCastMode.Oneside;
+        light.bounceIntensity = 1.5f;
+        light.volumetricDimmer = 2.0f;
         
         go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
         Debug.Log("[HDRPAutoLighting] Created new Directional Light");
@@ -111,18 +101,9 @@ public class HDRPAutoLighting : MonoBehaviour
         light.type = LightType.Directional;
         light.color = new Color(0.65f, 0.75f, 1f); // Холодный голубоватый
         light.intensity = fillLightIntensity;
+        light.lightUnit = LightUnit.Lux;
         light.shadows = LightShadows.None;
-        
-        var hdLight = go.GetComponent<HDAdditionalLightData>();
-        if (hdLight == null)
-        {
-            hdLight = go.AddComponent<HDAdditionalLightData>();
-        }
-        hdLight.lightUnit = LightUnit.Lux;
-        hdLight.intensity = fillLightIntensity;
-        hdLight.castShadows = false;
-        hdLight.shadowCastMode = LightShadowCastMode.Off;
-        hdLight.bounceIntensity = 0.8f;
+        light.bounceIntensity = 0.8f;
         
         go.transform.rotation = Quaternion.Euler(-15f, 160f, 0f);
         Debug.Log($"[HDRPAutoLighting] Created Fill Light: {fillLightIntensity} Lux");
@@ -152,7 +133,7 @@ public class HDRPAutoLighting : MonoBehaviour
         
         var profile = globalVolume.profile;
         
-        // Уменьшаем AO чтобы тени не были чёрными (HDRP использует AmbientOcclusion, не ScreenSpaceAmbientOcclusion)
+        // Уменьшаем AO чтобы тени не были чёрными
         var ambientOcclusion = profile.Get<AmbientOcclusion>();
         if (ambientOcclusion != null)
         {
@@ -186,13 +167,13 @@ public class HDRPAutoLighting : MonoBehaviour
         Camera mainCamera = Camera.main;
         if (mainCamera == null) return;
         
+        // Настройка exposure через HDAdditionalLightData (актуальный API)
         var hdLightData = mainCamera.GetComponent<HDAdditionalLightData>();
         if (hdLightData == null)
         {
             hdLightData = mainCamera.gameObject.AddComponent<HDAdditionalLightData>();
         }
         
-        hdLightData.setExposureFromMonitoring = false;
         hdLightData.exposureCompensation = cameraExposureCompensation;
         
         Debug.Log($"[HDRPAutoLighting] Camera exposure +{cameraExposureCompensation} EV");
