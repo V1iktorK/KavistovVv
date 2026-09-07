@@ -70,8 +70,8 @@ public class SettingsMenu : MonoBehaviour
         // Ввод
         inputDeviceDropdown.value = (int)settings.preferredDevice;
         inputDeviceDropdown.onValueChanged.AddListener(v => {
-            settings.preferredDevice = (InputManager.InputDevice)v;
-            InputManager.Instance?.SetInputDevice(settings.preferredDevice);
+            settings.preferredDevice = (InputDeviceType)v;
+            InputManager.Instance?.SetInputDevice((InputManager.InputDevice)v);
         });
         
         mouseSensSlider.value = settings.mouseSensitivity;

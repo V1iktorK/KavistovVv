@@ -61,41 +61,6 @@ public class SixAxisController : RobotController
             }
         }
     }
-
-    private static Transform FindChild(Transform root, string objectName)
-    {
-        foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
-        {
-            if (child.name == objectName) return child;
-        }
-
-        return null;
-    }
-
-    private static Transform FindDeepestDescendant(Transform root)
-    {
-        Transform deepest = null;
-        int deepestLevel = -1;
-        foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
-        {
-            if (child == root) continue;
-            int level = 0;
-            Transform parent = child.parent;
-            while (parent != null && parent != root)
-            {
-                level++;
-                parent = parent.parent;
-            }
-
-            if (parent == root && level > deepestLevel)
-            {
-                deepest = child;
-                deepestLevel = level;
-            }
-        }
-
-        return deepest;
-    }
     
     public override void SetTarget(Vector3 position, Quaternion? rotation = null)
     {

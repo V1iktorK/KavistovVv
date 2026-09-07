@@ -1,0 +1,27 @@
+using UnityEngine;
+
+/// <summary>
+/// Отдельный enum для устройства ввода (не зависит от InputManager MonoBehaviour).
+/// Используется SettingsData и InputManager.
+/// </summary>
+public enum InputDeviceType
+{
+    KeyboardMouse = 0,
+    VR = 1,
+    Gamepad = 2,
+    MR = 3,
+    AR = 4
+}
+
+public static class InputDeviceExtensions
+{
+    public static InputManager.InputDevice ToInputManagerDevice(this InputDeviceType type)
+    {
+        return (InputManager.InputDevice)type;
+    }
+    
+    public static InputDeviceType ToInputDeviceType(this InputManager.InputDevice type)
+    {
+        return (InputDeviceType)type;
+    }
+}

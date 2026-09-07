@@ -14,7 +14,7 @@ public class InputManager : MonoBehaviour
     private InputProvider activeProvider;
     public InputProvider ActiveProvider => activeProvider;
     
-    public enum InputDevice { VR, KeyboardMouse, Gamepad, MR, AR }
+    public enum InputDevice { KeyboardMouse, VR, Gamepad, MR, AR }
 
     private void EnsureProvidersExist()
     {

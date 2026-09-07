@@ -6,7 +6,7 @@ public class SettingsData : ScriptableObject
     public static SettingsData Instance;
     
     [Header("Ввод")]
-    public InputManager.InputDevice preferredDevice = InputManager.InputDevice.KeyboardMouse;
+    public InputDeviceType preferredDevice = InputDeviceType.KeyboardMouse;
     [Range(0.1f, 5f)] public float mouseSensitivity = 1f;
     [Range(0.1f, 5f)] public float gamepadSensitivity = 1f;
     public bool invertY = false;

@@ -120,7 +120,7 @@ public class RobotController : MonoBehaviour // Убрали abstract
         return joints.ToArray();
     }
 
-    private static Transform FindDeepestDescendant(Transform root)
+    protected static Transform FindDeepestDescendant(Transform root)
     {
         Transform deepest = null;
         int deepestLevel = -1;
@@ -149,7 +149,7 @@ public class RobotController : MonoBehaviour // Убрали abstract
         return deepest;
     }
 
-    private static Transform FindChild(Transform root, string objectName)
+    protected static Transform FindChild(Transform root, string objectName)
     {
         if (root == null || string.IsNullOrEmpty(objectName))
         {
