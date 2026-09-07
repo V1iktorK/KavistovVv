@@ -25,7 +25,7 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixDirectionalLight()
     {
-        Light[] lights = Object.FindObjectsOfType<Light>();
+        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
         foreach (Light light in lights)
         {
             if (light.type != LightType.Directional) continue;
@@ -86,7 +86,7 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixAmbientLighting()
     {
-        Volume[] volumes = Object.FindObjectsOfType<Volume>();
+        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
         Volume globalVolume = null;
 
         foreach (Volume vol in volumes)
@@ -108,41 +108,30 @@ public class HDRPAutoLighting : MonoBehaviour
         VolumeProfile profile = globalVolume.profile;
 
         // Ambient Occlusion
-        bool foundAO = profile.TryGet<AmbientOcclusion>(out AmbientOcclusion ao);
+        bool foundAO = profile.TryGet<ScreenSpaceAmbientOcclusion>(out ScreenSpaceAmbientOcclusion ao);
         if (foundAO)
             ao.intensity.Override(0f);
 
-        // Color Adjustments
-        ColorAdjustments colorAdj;
-        bool foundColor = profile.TryGet<ColorAdjustments>(out colorAdj);
-        if (!foundColor)
-        {
-            colorAdj = ScriptableObject.CreateInstance<ColorAdjustments>();
-            profile.Add(colorAdj);
-        }
-        colorAdj.postExposure.Override(ambientBoost);
+        // Color Adjustments — повышаем яркость
+        bool foundColor = profile.TryGet<ColorAdjustments>(out ColorAdjustments colorAdj);
+        if (foundColor)
+            colorAdj.postExposure.Override(ambientBoost);
 
-        // Bloom
-        Bloom bloom;
-        bool foundBloom = profile.TryGet<Bloom>(out bloom);
-        if (!foundBloom)
+        // Bloom — немного для мягкости
+        bool foundBloom = profile.TryGet<Bloom>(out Bloom bloom);
+        if (foundBloom)
         {
-            bloom = ScriptableObject.CreateInstance<Bloom>();
-            profile.Add(bloom);
+            bloom.intensity.Override(0.15f);
+            bloom.threshold.Override(0.9f);
         }
-        bloom.intensity.Override(0.15f);
-        bloom.threshold.Override(0.9f);
 
         Debug.Log("[HDRPAutoLighting] Ambient lighting fixed");
     }
 
     void FixCameraExposure()
     {
-        Camera cam = Camera.main;
-        if (cam == null) return;
-
         // Настройка exposure через Exposure volume component
-        Volume[] volumes = Object.FindObjectsOfType<Volume>();
+        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
         Volume globalVolume = null;
 
         foreach (Volume vol in volumes)
@@ -162,14 +151,11 @@ public class HDRPAutoLighting : MonoBehaviour
         }
 
         VolumeProfile profile = globalVolume.profile;
-        Exposure exposure;
-        bool foundExposure = profile.TryGet<Exposure>(out exposure);
-        if (!foundExposure)
+        bool foundExposure = profile.TryGet<Exposure>(out Exposure exposure);
+        if (foundExposure)
         {
-            exposure = ScriptableObject.CreateInstance<Exposure>();
-            profile.Add(exposure);
+            exposure.compensation.Override(cameraExposureCompensation);
         }
-        exposure.compensation.Override(cameraExposureCompensation);
 
         Debug.Log("[HDRPAutoLighting] Camera exposure: " + cameraExposureCompensation);
     }
