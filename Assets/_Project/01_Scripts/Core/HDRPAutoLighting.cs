@@ -25,7 +25,7 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixDirectionalLight()
     {
-        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
+        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsInactive.Include);
         foreach (Light light in lights)
         {
             if (light.type != LightType.Directional) continue;
@@ -86,7 +86,7 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixAmbientLighting()
     {
-        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
+        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Include);
         Volume globalVolume = null;
 
         foreach (Volume vol in volumes)
@@ -131,7 +131,7 @@ public class HDRPAutoLighting : MonoBehaviour
     void FixCameraExposure()
     {
         // Настройка exposure через Exposure volume component
-        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Ignore, FindObjectsSortMode.None);
+        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Include);
         Volume globalVolume = null;
 
         foreach (Volume vol in volumes)
