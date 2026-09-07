@@ -4,11 +4,7 @@ using UnityEngine.Rendering.HighDefinition;
 
 /// <summary>
 /// Автоматически исправляет освещение HDRP при запуске сцены.
-/// Исправляет:
-/// - Directional Light: переключает из Kelvin в Lux, увеличивает интенсивность
-/// - Добавляет Ambient/Fill источники для яркости
-/// - Настраивает Exposure камеры
-/// НЕ трогает FreeFlyCameraController, роботов, сцену.
+/// Использует только актуальный HDRP API (2023.3+).
 /// </summary>
 public class HDRPAutoLighting : MonoBehaviour
 {
@@ -41,8 +37,8 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixDirectionalLight()
     {
-        // Находим Directional Light в сцене (совместимо со всеми версиями Unity)
-        Light[] lights = Object.FindObjectsOfType<Light>();
+        // Находим Directional Light в сцене
+        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
         foreach (var light in lights)
         {
             if (light.type != LightType.Directional) continue;
@@ -55,7 +51,7 @@ public class HDRPAutoLighting : MonoBehaviour
             // Настройка теней
             light.shadows = LightShadows.SuperHard;
             light.shadowDimmer = 1f;
-            light.shadowCastMode = LightShadowCastMode.Oneside;
+            light.shadowCastMode = UnityEngine.Rendering.LightShadowCastMode.Oneside;
             
             // Bounce light для отражений
             light.bounceIntensity = 1.5f;
@@ -81,7 +77,7 @@ public class HDRPAutoLighting : MonoBehaviour
         light.lightUnit = LightUnit.Lux;
         light.shadows = LightShadows.SuperHard;
         light.shadowDimmer = 1f;
-        light.shadowCastMode = LightShadowCastMode.Oneside;
+        light.shadowCastMode = UnityEngine.Rendering.LightShadowCastMode.Oneside;
         light.bounceIntensity = 1.5f;
         light.volumetricDimmer = 2.0f;
         
@@ -111,8 +107,8 @@ public class HDRPAutoLighting : MonoBehaviour
 
     void FixAmbientLighting()
     {
-        // Находим Volume в сцене (совместимо со всеми версиями Unity)
-        Volume[] volumes = Object.FindObjectsOfType<Volume>();
+        // Находим Volume в сцене
+        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsSortMode.None);
         Volume globalVolume = null;
         
         foreach (var vol in volumes)
@@ -167,7 +163,7 @@ public class HDRPAutoLighting : MonoBehaviour
         Camera mainCamera = Camera.main;
         if (mainCamera == null) return;
         
-        // Настройка exposure через HDAdditionalLightData (актуальный API)
+        // Настройка exposure через HDAdditionalLightData
         var hdLightData = mainCamera.GetComponent<HDAdditionalLightData>();
         if (hdLightData == null)
         {
