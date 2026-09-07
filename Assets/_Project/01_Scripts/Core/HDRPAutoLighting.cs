@@ -4,66 +4,47 @@ using UnityEngine.Rendering.HighDefinition;
 
 /// <summary>
 /// Автоматически исправляет освещение HDRP при запуске сцены.
-/// Использует только актуальный HDRP API (2023.3+).
 /// </summary>
 public class HDRPAutoLighting : MonoBehaviour
 {
     [Header("Light Settings")]
-    [Tooltip("Intensity of main directional light in Lux")]
     public float mainLightIntensity = 80000f;
-    
-    [Tooltip("Fill light intensity in Lux (0 = disabled)")]
     public float fillLightIntensity = 20000f;
-    
-    [Tooltip("Ambient brightness boost")]
     public float ambientBoost = 0.5f;
-    
-    [Header("Camera")]
-    [Tooltip("Extra exposure compensation for camera (+EV)")]
     public float cameraExposureCompensation = 1.0f;
 
     void Start()
     {
         FixDirectionalLight();
         if (fillLightIntensity > 0f)
-        {
             CreateFillLight();
-        }
         FixAmbientLighting();
         FixCameraExposure();
-        
         Debug.Log("[HDRPAutoLighting] Lighting fixed. Main: " + mainLightIntensity + " Lux, Fill: " + fillLightIntensity + " Lux");
     }
 
     void FixDirectionalLight()
     {
-        // Находим Directional Light в сцене
-        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
-        foreach (var light in lights)
+        Light[] lights = Object.FindObjectsOfType<Light>();
+        foreach (Light light in lights)
         {
             if (light.type != LightType.Directional) continue;
-            
-            // Настройка через Light компонент (актуальный API)
+
             light.color = new Color(1f, 0.95f, 0.88f);
             light.intensity = mainLightIntensity;
             light.lightUnit = LightUnit.Lux;
-            
-            // Настройка теней
-            light.shadows = LightShadows.SuperHard;
-            light.shadowDimmer = 1f;
-            light.shadowCastMode = UnityEngine.Rendering.LightShadowCastMode.Oneside;
-            
-            // Bounce light для отражений
+            light.shadows = LightShadows.Soft;
             light.bounceIntensity = 1.5f;
-            
-            // Увеличиваем радиус для volumetric effects
-            light.volumetricDimmer = 2.0f;
-            
-            Debug.Log($"[HDRPAutoLighting] Fixed Directional Light: {light.gameObject.name} -> {mainLightIntensity} Lux");
+
+            HDAdditionalLightData hdLight = light.GetComponent<HDAdditionalLightData>();
+            if (hdLight != null)
+            {
+                hdLight.volumetricDimmer = 2.0f;
+            }
+
+            Debug.Log("[HDRPAutoLighting] Fixed: " + light.gameObject.name);
             return;
         }
-        
-        // Если Directional Light не найден — создаём
         CreateMainDirectionalLight();
     }
 
@@ -75,43 +56,40 @@ public class HDRPAutoLighting : MonoBehaviour
         light.color = new Color(1f, 0.95f, 0.88f);
         light.intensity = mainLightIntensity;
         light.lightUnit = LightUnit.Lux;
-        light.shadows = LightShadows.SuperHard;
-        light.shadowDimmer = 1f;
-        light.shadowCastMode = UnityEngine.Rendering.LightShadowCastMode.Oneside;
+        light.shadows = LightShadows.Soft;
         light.bounceIntensity = 1.5f;
-        light.volumetricDimmer = 2.0f;
-        
+
         go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-        Debug.Log("[HDRPAutoLighting] Created new Directional Light");
+        Debug.Log("[HDRPAutoLighting] Created Directional Light");
     }
 
     void CreateFillLight()
     {
         GameObject go = GameObject.Find("FillLight");
         if (go == null)
-        {
             go = new GameObject("FillLight");
-        }
-        
-        Light light = go.GetComponent<Light>() ?? go.AddComponent<Light>();
+
+        Light light = go.GetComponent<Light>();
+        if (light == null)
+            light = go.AddComponent<Light>();
+
         light.type = LightType.Directional;
-        light.color = new Color(0.65f, 0.75f, 1f); // Холодный голубоватый
+        light.color = new Color(0.65f, 0.75f, 1f);
         light.intensity = fillLightIntensity;
         light.lightUnit = LightUnit.Lux;
         light.shadows = LightShadows.None;
         light.bounceIntensity = 0.8f;
-        
+
         go.transform.rotation = Quaternion.Euler(-15f, 160f, 0f);
-        Debug.Log($"[HDRPAutoLighting] Created Fill Light: {fillLightIntensity} Lux");
+        Debug.Log("[HDRPAutoLighting] Created Fill Light");
     }
 
     void FixAmbientLighting()
     {
-        // Находим Volume в сцене
-        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsSortMode.None);
+        Volume[] volumes = Object.FindObjectsOfType<Volume>();
         Volume globalVolume = null;
-        
-        foreach (var vol in volumes)
+
+        foreach (Volume vol in volumes)
         {
             if (vol.isGlobal)
             {
@@ -119,59 +97,80 @@ public class HDRPAutoLighting : MonoBehaviour
                 break;
             }
         }
-        
+
         if (globalVolume == null)
         {
             globalVolume = new GameObject("GlobalAmbientVolume", typeof(Volume)).GetComponent<Volume>();
             globalVolume.isGlobal = true;
             globalVolume.priority = 0;
         }
-        
-        var profile = globalVolume.profile;
-        
-        // Уменьшаем AO чтобы тени не были чёрными
-        var ambientOcclusion = profile.Get<AmbientOcclusion>();
-        if (ambientOcclusion != null)
+
+        VolumeProfile profile = globalVolume.profile;
+
+        // Ambient Occlusion
+        bool foundAO = profile.TryGet<AmbientOcclusion>(out AmbientOcclusion ao);
+        if (foundAO)
+            ao.intensity.Override(0f);
+
+        // Color Adjustments
+        ColorAdjustments colorAdj;
+        bool foundColor = profile.TryGet<ColorAdjustments>(out colorAdj);
+        if (!foundColor)
         {
-            ambientOcclusion.intensity.Override(0f);
+            colorAdj = ScriptableObject.CreateInstance<ColorAdjustments>();
+            profile.Add(colorAdj);
         }
-        
-        // Color Adjustments — повышаем яркость
-        var colorAdjustments = profile.Get<ColorAdjustments>();
-        if (colorAdjustments == null)
-        {
-            colorAdjustments = ScriptableObject.CreateInstance<ColorAdjustments>();
-            profile.Add(colorAdjustments);
-        }
-        colorAdjustments.postExposure.Override(ambientBoost);
-        
-        // Bloom — немного для мягкости
-        var bloom = profile.Get<Bloom>();
-        if (bloom == null)
+        colorAdj.postExposure.Override(ambientBoost);
+
+        // Bloom
+        Bloom bloom;
+        bool foundBloom = profile.TryGet<Bloom>(out bloom);
+        if (!foundBloom)
         {
             bloom = ScriptableObject.CreateInstance<Bloom>();
             profile.Add(bloom);
         }
         bloom.intensity.Override(0.15f);
         bloom.threshold.Override(0.9f);
-        
+
         Debug.Log("[HDRPAutoLighting] Ambient lighting fixed");
     }
 
     void FixCameraExposure()
     {
-        Camera mainCamera = Camera.main;
-        if (mainCamera == null) return;
-        
-        // Настройка exposure через HDAdditionalLightData
-        var hdLightData = mainCamera.GetComponent<HDAdditionalLightData>();
-        if (hdLightData == null)
+        Camera cam = Camera.main;
+        if (cam == null) return;
+
+        // Настройка exposure через Exposure volume component
+        Volume[] volumes = Object.FindObjectsOfType<Volume>();
+        Volume globalVolume = null;
+
+        foreach (Volume vol in volumes)
         {
-            hdLightData = mainCamera.gameObject.AddComponent<HDAdditionalLightData>();
+            if (vol.isGlobal)
+            {
+                globalVolume = vol;
+                break;
+            }
         }
-        
-        hdLightData.exposureCompensation = cameraExposureCompensation;
-        
-        Debug.Log($"[HDRPAutoLighting] Camera exposure +{cameraExposureCompensation} EV");
+
+        if (globalVolume == null)
+        {
+            globalVolume = new GameObject("ExposureVolume", typeof(Volume)).GetComponent<Volume>();
+            globalVolume.isGlobal = true;
+            globalVolume.priority = 1;
+        }
+
+        VolumeProfile profile = globalVolume.profile;
+        Exposure exposure;
+        bool foundExposure = profile.TryGet<Exposure>(out exposure);
+        if (!foundExposure)
+        {
+            exposure = ScriptableObject.CreateInstance<Exposure>();
+            profile.Add(exposure);
+        }
+        exposure.compensation.Override(cameraExposureCompensation);
+
+        Debug.Log("[HDRPAutoLighting] Camera exposure: " + cameraExposureCompensation);
     }
 }

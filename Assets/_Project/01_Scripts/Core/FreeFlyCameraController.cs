@@ -277,7 +277,7 @@ public class FreeFlyCameraController : MonoBehaviour
             }
             if (selectedRobot == null)
             {
-                RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsSortMode.None);
+                RobotController[] robots = Object.FindObjectsByType<RobotController>();
                 if (robots.Length > 0)
                 {
                     selectedRobot = robots[0];
@@ -301,7 +301,7 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         RobotController closestRobot = null;
         float closestRayDistance = float.PositiveInfinity;
-        foreach (RobotController candidate in Object.FindObjectsByType<RobotController>(FindObjectsSortMode.None))
+        foreach (RobotController candidate in Object.FindObjectsByType<RobotController>())
         {
             RobotController robot = FindPreferredRobotController(candidate.transform);
             if (robot == null || robot != candidate && candidate is SCARAController) continue;
