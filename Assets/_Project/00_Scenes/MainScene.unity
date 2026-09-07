@@ -459,7 +459,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: 14499f7a7f05aea42af528d3120eafbe, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0.8337681
+      value: -0.781
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 14499f7a7f05aea42af528d3120eafbe, type: 3}
       propertyPath: m_LocalPosition.y
@@ -2979,6 +2979,15 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 100024, guid: 65c1693bdb32d734e91340b1c85bee93, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1387993597}
+    - targetCorrespondingSourceObject: {fileID: 100024, guid: 65c1693bdb32d734e91340b1c85bee93, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1387993599}
+    - targetCorrespondingSourceObject: {fileID: 100024, guid: 65c1693bdb32d734e91340b1c85bee93, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1387993600}
+    - targetCorrespondingSourceObject: {fileID: 100024, guid: 65c1693bdb32d734e91340b1c85bee93, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1387993601}
   m_SourcePrefab: {fileID: 100100000, guid: 65c1693bdb32d734e91340b1c85bee93, type: 3}
 --- !u!114 &1387993596
 MonoBehaviour:
@@ -3035,7 +3044,55 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SpatialAnchorManager
   robotRoot: {fileID: 0}
-  placementIndicator: {fileID: 0}
+   placementIndicator: {fileID: 0}
+--- !u!114 &1387993599
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1241463225}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2711c6a09f3e764eb0acea8a5e41eb2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SixAxisController
+  ik: {fileID: 0}
+  jointTransforms: []
+  baseTransform: {fileID: 0}
+  baseName: LS10-B702S_base_1
+--- !u!114 &1387993600
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1241463225}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b5382737b9394846ac75fa439c5b65e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::InverseKinematics
+  joints: []
+  target: {fileID: 0}
+  baseTransform: {fileID: 0}
+  endEffector: {fileID: 0}
+  threshold: 0.01
+  maxIterations: 10
+--- !u!114 &1387993601
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1241463225}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 123768cd31386774985e01e836e4ec8b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SixAxisAutoSetup
+  autoSetupOnStart: 1
+  removeExtraComponents: 1
 --- !u!1001 &1402208917
 PrefabInstance:
   m_ObjectHideFlags: 0
