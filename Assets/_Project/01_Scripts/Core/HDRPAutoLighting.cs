@@ -19,27 +19,28 @@ public class HDRPAutoLighting : MonoBehaviour
 {
     [Header("Key light (ключевой свет над зоной роботов)")]
     public bool enableKeyLight = true;
-    public float mainLightIntensity = 300000f;  // люкс
+    [Tooltip("Дополняет существующее солнце, не заменяет его.")]
+    public float mainLightIntensity = 80000f;  // люкс
     public Color keyLightColor = new Color(1f, 0.98f, 0.94f); // тёплый белый
     public float lightHeight = 4f;
     public float lightDistance = 4f;
 
     [Header("Fill light (заливающий свет)")]
-    public float fillLightIntensity = 90000f;   // люкс
+    public float fillLightIntensity = 30000f;   // люкс
     public Color fillColor = new Color(0.96f, 0.98f, 1f); // холодно-нейтральный белый
 
     [Header("Rim light (контровой свет)")]
-    public float rimLightIntensity = 50000f;    // люкс
+    public float rimLightIntensity = 20000f;    // люкс
 
     [Header("Зона освещения")]
     public Transform[] lightTargets;            // роботы/стол; если пусто — найдём роботов сами
     public Vector3 fallbackCenter = new Vector3(12f, 0f, -8f);
 
     [Header("Глобальная яркость (Volume)")]
-    [Tooltip("Пост-экспозиция перед color grading, в EV.")]
-    public float ambientBoost = 0.6f;
+    [Tooltip("Пост-экспозиция перед color grading, в EV. Скромное значение, чтобы не выбелить.")]
+    public float ambientBoost = 0.2f;
     [Tooltip("Компенсация авто-экспозиции, в EV.")]
-    public float cameraExposureCompensation = 1.5f;
+    public float cameraExposureCompensation = 0.5f;
     [Tooltip("Сила ambient occlusion (0 — полностью выключена, тёмные впадины уходят).")]
     public float ambientOcclusionStrength = 0.15f;
     public bool enableBloom = false;
@@ -209,6 +210,7 @@ public class HDRPAutoLighting : MonoBehaviour
     [UnityEditor.MenuItem("Tools/Robots/Apply Studio Lighting (HDRP)")]
     static void MenuApplyStudioLighting()
     {
+        // Ищем существующий компонент — не создаём дубликат.
         HDRPAutoLighting instance = Object.FindAnyObjectByType<HDRPAutoLighting>();
         if (instance == null)
         {
@@ -217,6 +219,25 @@ public class HDRPAutoLighting : MonoBehaviour
         }
         instance.Apply();
         Debug.Log("[HDRPAutoLighting] Применено через меню Tools/Robots.");
+    }
+
+    [UnityEditor.MenuItem("Tools/Robots/Remove Studio Lighting (HDRP)")]
+    static void MenuRemoveStudioLighting()
+    {
+        // Удаляем добавленные источники света, чтобы вернуть сцену к исходному состоянию.
+        DestroyStudioLight(KeyLightName);
+        DestroyStudioLight(FillLightName);
+        DestroyStudioLight(RimLightName);
+        Debug.Log("[HDRPAutoLighting] Студийный свет удалён.");
+    }
+
+    private static void DestroyStudioLight(string name)
+    {
+        GameObject go = GameObject.Find(name);
+        if (go != null)
+        {
+            Object.DestroyImmediate(go);
+        }
     }
     #endif
 }
