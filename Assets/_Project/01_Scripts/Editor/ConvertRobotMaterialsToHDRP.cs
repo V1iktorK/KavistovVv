@@ -52,7 +52,10 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
             foreach (var mf in meshFilters)
             {
                 if (mf.sharedMesh == null) continue;
-                Material[] mats = mf.sharedMesh.sharedMaterials;
+                // Материалы хранятся на Renderer, а не на Mesh.
+                Renderer renderer = mf.GetComponent<Renderer>();
+                if (renderer == null) continue;
+                Material[] mats = renderer.sharedMaterials;
                 Material[] newMats = new Material[mats.Length];
                 bool changed = false;
                 for (int i = 0; i < mats.Length; i++)
@@ -71,14 +74,15 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
                 }
                 if (changed)
                 {
-                    mf.sharedMesh.sharedMaterials = newMats;
+                    renderer.sharedMaterials = newMats;
                 }
             }
 
             foreach (var smr in skinnedRenderers)
             {
                 if (smr.sharedMesh == null) continue;
-                Material[] mats = smr.sharedMesh.sharedMaterials;
+                // SkinnedMeshRenderer — это Renderer, материалы лежат на нём.
+                Material[] mats = smr.sharedMaterials;
                 Material[] newMats = new Material[mats.Length];
                 bool changed = false;
                 for (int i = 0; i < mats.Length; i++)
@@ -97,7 +101,7 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
                 }
                 if (changed)
                 {
-                    smr.sharedMesh.sharedMaterials = newMats;
+                    smr.sharedMaterials = newMats;
                 }
             }
 
