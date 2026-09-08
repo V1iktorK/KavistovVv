@@ -8,7 +8,7 @@ public class GamepadInputProvider : InputProvider
     private Camera ResolveCamera()
     {
         if (playerCamera == null)
-            playerCamera = Camera.main != null ? Camera.main : FindAnyObjectByType<Camera>();
+            playerCamera = Camera.main != null ? Camera.main : Object.FindAnyObjectByType<Camera>();
 
         if (playerCamera == null)
             Debug.LogWarning("[GamepadInputProvider] Camera not assigned and no camera found.");
@@ -110,6 +110,12 @@ public class GamepadInputProvider : InputProvider
     public override bool IsAvailable()
     {
         var gamepad = GetGamepad();
-        return gamepad != null || Input.GetJoystickNames().Length > 0 && !string.IsNullOrEmpty(Input.GetJoystickNames()[0]);
+        if (gamepad != null)
+        {
+            return true;
+        }
+
+        string[] joysticks = Input.GetJoystickNames();
+        return joysticks.Length > 0 && joysticks[0] != null && joysticks[0].Length > 0;
     }
 }

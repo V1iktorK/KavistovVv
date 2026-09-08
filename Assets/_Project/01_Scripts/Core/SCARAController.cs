@@ -1,5 +1,9 @@
 using UnityEngine;
 
+/// <summary>
+/// Контроллер плоского (planar) SCARA-робота LS10-B702S:
+/// два вращающихся сустава J1/J2 и призматическая ось Z.
+/// </summary>
 public class SCARAController : RobotController
 {
     [Header("LS10 planar joints")]
@@ -35,41 +39,50 @@ public class SCARAController : RobotController
         UpdateTelemetry(Time.deltaTime);
     }
 
-    public override void SetTarget(Vector3 position, Quaternion? rotation = null)
+    public override void SetTarget(Vector3 position)
     {
         targetPosition = position;
-        targetRotation = rotation ?? Quaternion.identity;
         hasTarget = true;
+    }
+
+    public override void SetTarget(Vector3 position, Quaternion rotation)
+    {
+        SetTarget(position);
+        targetRotation = rotation;
     }
 
     public override void MoveToTarget(float deltaTime)
     {
-        if (!hasTarget) return;
+        if (!hasTarget)
+        {
+            return;
+        }
 
         ResolveJoints();
-        Transform resolvedBase = baseTransform != null ? baseTransform : FindChild(baseName);
-        Transform resolvedJoint1 = joint1 != null ? joint1 : FindChild(joint1Name, "J1");
-        Transform resolvedJoint2 = joint2 != null ? joint2 : FindChild(joint2Name, "J2");
-        Transform resolvedJoint3 = joint3 != null ? joint3 : FindChild(joint3Name, "_z_", "z_5");
+        Transform resolvedBase = baseTransform != null ? baseTransform : FindChild(new string[] { baseName });
+        Transform resolvedJoint1 = joint1 != null ? joint1 : FindChild(new string[] { joint1Name, "J1" });
+        Transform resolvedJoint2 = joint2 != null ? joint2 : FindChild(new string[] { joint2Name, "J2" });
+        Transform resolvedJoint3 = joint3 != null ? joint3 : FindChild(new string[] { joint3Name, "_z_", "z_5" });
 
         if (resolvedBase == null || resolvedJoint1 == null || resolvedJoint2 == null || resolvedJoint3 == null)
         {
             if (!referencesReported)
             {
                 Debug.LogError(
-                    $"[{name}] SCARA references missing. Assign base, J1, J2 and Z joints in the Inspector.",
+                    "[" + name + "] SCARA references missing. Assign base, J1, J2 and Z joints in the Inspector.",
                     this);
                 referencesReported = true;
             }
             return;
         }
+
         baseTransform = resolvedBase;
         joint1 = resolvedJoint1;
         joint2 = resolvedJoint2;
         joint3 = resolvedJoint3;
         if (!referencesReported)
         {
-            Debug.Log($"[{name}] SCARA joints resolved.", this);
+            Debug.Log("[" + name + "] SCARA joints resolved.", this);
             referencesReported = true;
         }
         if (!geometryCached)
@@ -79,7 +92,8 @@ public class SCARAController : RobotController
 
         Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : baseTransform.up;
         Vector3 basePosition = baseTransform.position;
-        float speed = Mathf.Clamp01(maxSpeed * (SettingsData.Instance?.robotSpeed ?? 1f) * deltaTime * 5f);
+        float settingsSpeed = SettingsData.Instance != null ? SettingsData.Instance.robotSpeed : 1f;
+        float speed = Mathf.Clamp01(maxSpeed * settingsSpeed * deltaTime * 5f);
 
         Vector3 planarTarget = basePosition + Vector3.ProjectOnPlane(targetPosition - basePosition, axis);
         for (int iteration = 0; iteration < 4; iteration++)
@@ -103,12 +117,13 @@ public class SCARAController : RobotController
         float desiredHeight = Mathf.Clamp(targetHeight, initialHeight + ZMin, initialHeight + ZMax);
         float heightOffset = Mathf.Clamp(desiredHeight - currentHeight, -ZMax, ZMax);
         Vector3 desiredZPosition = joint3.position + axis * heightOffset;
-        Transform parent = joint3.parent;
-        if (parent != null)
+
+        Transform zParent = joint3.parent;
+        if (zParent != null)
         {
             joint3.localPosition = Vector3.Lerp(
                 joint3.localPosition,
-                parent.InverseTransformPoint(desiredZPosition),
+                zParent.InverseTransformPoint(desiredZPosition),
                 speed);
         }
     }
@@ -117,7 +132,7 @@ public class SCARAController : RobotController
     {
         if (baseTransform == null)
         {
-            baseTransform = FindChild(baseName);
+            baseTransform = FindChild(new string[] { baseName });
         }
 
         if (baseTransform == null)
@@ -125,9 +140,18 @@ public class SCARAController : RobotController
             baseTransform = transform;
         }
 
-        if (joint1 == null) joint1 = FindChild(joint1Name, "J1");
-        if (joint2 == null) joint2 = FindChild(joint2Name, "J2");
-        if (joint3 == null) joint3 = FindChild(joint3Name, "_z_", "z_5");
+        if (joint1 == null)
+        {
+            joint1 = FindChild(new string[] { joint1Name, "J1" });
+        }
+        if (joint2 == null)
+        {
+            joint2 = FindChild(new string[] { joint2Name, "J2" });
+        }
+        if (joint3 == null)
+        {
+            joint3 = FindChild(new string[] { joint3Name, "_z_", "z_5" });
+        }
 
         if (verticalAxis.sqrMagnitude < 0.001f && baseTransform != null)
         {
@@ -137,12 +161,16 @@ public class SCARAController : RobotController
 
     private void CacheGeometry()
     {
-        if (baseTransform == null || joint1 == null || joint2 == null || joint3 == null) return;
+        if (baseTransform == null || joint1 == null || joint2 == null || joint3 == null)
+        {
+            return;
+        }
 
         initialHeight = Vector3.Dot(joint3.position - baseTransform.position, verticalAxis);
         geometryCached = true;
     }
 
+    /// <summary>Поворачивает сустав вокруг вертикальной оси к желаемому направлению.</summary>
     private static void RotateAroundAxisTowards(
         Transform joint,
         Vector3 currentDirection,
@@ -152,20 +180,27 @@ public class SCARAController : RobotController
     {
         currentDirection = Vector3.ProjectOnPlane(currentDirection, axis);
         desiredDirection = Vector3.ProjectOnPlane(desiredDirection, axis);
-        if (joint == null || currentDirection.sqrMagnitude < 0.001f || desiredDirection.sqrMagnitude < 0.001f) return;
+        if (joint == null || currentDirection.sqrMagnitude < 0.001f || desiredDirection.sqrMagnitude < 0.001f)
+        {
+            return;
+        }
 
         float angle = Vector3.SignedAngle(currentDirection, desiredDirection, axis);
         joint.Rotate(axis, angle * amount, Space.World);
     }
 
-    private Transform FindChild(params string[] names)
+    /// <summary>
+    /// Ищет потомка, имя которого целиком совпадает с одним из переданных
+    /// вариантов либо содержит его (без учёта регистра).
+    /// </summary>
+    private Transform FindChild(string[] names)
     {
         foreach (Transform child in GetComponentsInChildren<Transform>(true))
         {
             foreach (string objectName in names)
             {
-                if (child.name == objectName ||
-                    child.name.IndexOf(objectName, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                if (objectName != null &&
+                    (child.name == objectName || ContainsIgnoreCase(child.name, objectName)))
                 {
                     return child;
                 }
@@ -175,13 +210,18 @@ public class SCARAController : RobotController
         return null;
     }
 
+    private static bool ContainsIgnoreCase(string text, string substring)
+    {
+        return text.ToLower().IndexOf(substring.ToLower()) >= 0;
+    }
+
     public override float[] GetJointAngles()
     {
-        return new[]
+        return new float[]
         {
-            joint1 ? joint1.localEulerAngles.y : 0f,
-            joint2 ? joint2.localEulerAngles.y : 0f,
-            joint3 ? joint3.localPosition.y : 0f
+            joint1 != null ? joint1.localEulerAngles.y : 0f,
+            joint2 != null ? joint2.localEulerAngles.y : 0f,
+            joint3 != null ? joint3.localPosition.y : 0f
         };
     }
 }

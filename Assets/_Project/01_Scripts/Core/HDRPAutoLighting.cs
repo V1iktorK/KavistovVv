@@ -3,160 +3,220 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
 
 /// <summary>
-/// Автоматически исправляет освещение HDRP при запуске сцены.
+/// Автоматически настраивает освещение HDRP:
+/// добавляет аддитивный «студийный» световой сет (ключевой, заливающий
+/// и контровой источники) над зоной роботов и слегка поднимает общую
+/// яркость через глобальный Volume (Exposure / ColorAdjustments / AO / Bloom).
+///
+/// ВАЖНО:
+///  - существующие направленные источники (солнце) НЕ трогаются;
+///  - все цвета нейтральные (тёплый белый / белый), никакого фиолетового
+///    тонирования; за фиолетовый оттенок отвечает только hueShift/colorFilter,
+///    которые этот скрипт не изменяет.
 /// </summary>
+[ExecuteInEditMode]
 public class HDRPAutoLighting : MonoBehaviour
 {
-    [Header("Light Settings")]
-    public float mainLightIntensity = 80000f;
-    public float fillLightIntensity = 20000f;
-    public float ambientBoost = 0.5f;
-    public float cameraExposureCompensation = 1.0f;
+    [Header("Key light (ключевой свет над зоной роботов)")]
+    public bool enableKeyLight = true;
+    public float mainLightIntensity = 300000f;  // люкс
+    public Color keyLightColor = new Color(1f, 0.98f, 0.94f); // тёплый белый
+    public float lightHeight = 4f;
+    public float lightDistance = 4f;
+
+    [Header("Fill light (заливающий свет)")]
+    public float fillLightIntensity = 90000f;   // люкс
+    public Color fillColor = new Color(0.96f, 0.98f, 1f); // холодно-нейтральный белый
+
+    [Header("Rim light (контровой свет)")]
+    public float rimLightIntensity = 50000f;    // люкс
+
+    [Header("Зона освещения")]
+    public Transform[] lightTargets;            // роботы/стол; если пусто — найдём роботов сами
+    public Vector3 fallbackCenter = new Vector3(12f, 0f, -8f);
+
+    [Header("Глобальная яркость (Volume)")]
+    [Tooltip("Пост-экспозиция перед color grading, в EV.")]
+    public float ambientBoost = 0.6f;
+    [Tooltip("Компенсация авто-экспозиции, в EV.")]
+    public float cameraExposureCompensation = 1.5f;
+    [Tooltip("Сила ambient occlusion (0 — полностью выключена, тёмные впадины уходят).")]
+    public float ambientOcclusionStrength = 0.15f;
+    public bool enableBloom = false;
+
+    private const string KeyLightName = "Cline_KeyLight";
+    private const string FillLightName = "Cline_FillLight";
+    private const string RimLightName = "Cline_RimLight";
 
     void Start()
     {
-        FixDirectionalLight();
-        if (fillLightIntensity > 0f)
-            CreateFillLight();
-        FixAmbientLighting();
-        FixCameraExposure();
-        Debug.Log("[HDRPAutoLighting] Lighting fixed. Main: " + mainLightIntensity + " Lux, Fill: " + fillLightIntensity + " Lux");
+        Apply();
     }
 
-    void FixDirectionalLight()
+    /// <summary>Применяет студийный сет и настройки Volume. Идемпотентно.</summary>
+    public void Apply()
     {
-        Light[] lights = Object.FindObjectsByType<Light>(FindObjectsInactive.Include);
-        foreach (Light light in lights)
+        Vector3 center = ResolveLightCenter();
+        if (enableKeyLight)
         {
-            if (light.type != LightType.Directional) continue;
-
-            light.color = new Color(1f, 0.95f, 0.88f);
-            light.intensity = mainLightIntensity;
-            light.lightUnit = LightUnit.Lux;
-            light.shadows = LightShadows.Soft;
-            light.bounceIntensity = 1.5f;
-
-            HDAdditionalLightData hdLight = light.GetComponent<HDAdditionalLightData>();
-            if (hdLight != null)
-            {
-                hdLight.volumetricDimmer = 2.0f;
-            }
-
-            Debug.Log("[HDRPAutoLighting] Fixed: " + light.gameObject.name);
-            return;
+            SetupStudioLight(KeyLightName, keyLightColor, mainLightIntensity,
+                center + new Vector3(lightDistance, lightHeight, lightDistance * 0.5f), center);
         }
-        CreateMainDirectionalLight();
+        SetupStudioLight(FillLightName, fillColor, fillLightIntensity,
+            center + new Vector3(-lightDistance, lightHeight * 0.8f, -lightDistance * 0.3f), center);
+        SetupStudioLight(RimLightName, Color.white, rimLightIntensity,
+            center + new Vector3(0f, lightHeight, -lightDistance * 1.2f), center);
+
+        ConfigureGlobalVolume();
+        Debug.Log("[HDRPAutoLighting] Студийный свет применён. Ключевой: " + mainLightIntensity +
+                  " лк, заливающий: " + fillLightIntensity + " лк");
     }
 
-    void CreateMainDirectionalLight()
+    /// <summary>Центр зоны освещения: по заданным целям, иначе по роботам сцены, иначе fallback.</summary>
+    private Vector3 ResolveLightCenter()
     {
-        GameObject go = new GameObject("MainDirectionalLight");
-        Light light = go.AddComponent<Light>();
-        light.type = LightType.Directional;
-        light.color = new Color(1f, 0.95f, 0.88f);
-        light.intensity = mainLightIntensity;
-        light.lightUnit = LightUnit.Lux;
-        light.shadows = LightShadows.Soft;
-        light.bounceIntensity = 1.5f;
+        if (lightTargets != null && lightTargets.Length > 0)
+        {
+            Vector3 sum = Vector3.zero;
+            int count = 0;
+            for (int i = 0; i < lightTargets.Length; i++)
+            {
+                if (lightTargets[i] != null)
+                {
+                    sum += lightTargets[i].position;
+                    count++;
+                }
+            }
+            if (count > 0)
+            {
+                return sum / count;
+            }
+        }
 
-        go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-        Debug.Log("[HDRPAutoLighting] Created Directional Light");
+        RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+        if (robots.Length > 0)
+        {
+            Vector3 sum = Vector3.zero;
+            int count = 0;
+            for (int i = 0; i < robots.Length; i++)
+            {
+                if (robots[i] != null)
+                {
+                    sum += robots[i].transform.position;
+                    count++;
+                }
+            }
+            return sum / count;
+        }
+
+        return fallbackCenter;
     }
 
-    void CreateFillLight()
+    private void SetupStudioLight(string lightName, Color color, float intensityLux, Vector3 position, Vector3 lookAt)
     {
-        GameObject go = GameObject.Find("FillLight");
+        GameObject go = GameObject.Find(lightName);
         if (go == null)
-            go = new GameObject("FillLight");
+        {
+            go = new GameObject(lightName);
+            go.AddComponent<Light>();
+            go.AddComponent<HDAdditionalLightData>();
+        }
 
         Light light = go.GetComponent<Light>();
         if (light == null)
+        {
             light = go.AddComponent<Light>();
+        }
 
         light.type = LightType.Directional;
-        light.color = new Color(0.65f, 0.75f, 1f);
-        light.intensity = fillLightIntensity;
+        light.color = color;
         light.lightUnit = LightUnit.Lux;
-        light.shadows = LightShadows.None;
-        light.bounceIntensity = 0.8f;
+        light.intensity = intensityLux;
 
-        go.transform.rotation = Quaternion.Euler(-15f, 160f, 0f);
-        Debug.Log("[HDRPAutoLighting] Created Fill Light");
+        go.transform.position = position;
+        go.transform.LookAt(lookAt + Vector3.up * 1f);
     }
 
-    void FixAmbientLighting()
+    /// <summary>Настраивает глобальный Volume: экспозиция, пост-экспозиция, AO, Bloom.</summary>
+    private void ConfigureGlobalVolume()
     {
-        Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Include);
-        Volume globalVolume = null;
-
-        foreach (Volume vol in volumes)
+        Volume volume = FindGlobalVolume();
+        if (volume == null)
         {
-            if (vol.isGlobal)
-            {
-                globalVolume = vol;
-                break;
-            }
+            GameObject go = new GameObject("Cline_GlobalVolume", typeof(Volume));
+            volume = go.GetComponent<Volume>();
+            volume.isGlobal = true;
+            volume.priority = 10f;
         }
 
-        if (globalVolume == null)
+        VolumeProfile profile = volume.profile;
+
+        // Экспозиция: оставляем авто-режим, но добавляем компенсацию.
+        if (!profile.TryGet<Exposure>(out Exposure exposure))
         {
-            globalVolume = new GameObject("GlobalAmbientVolume", typeof(Volume)).GetComponent<Volume>();
-            globalVolume.isGlobal = true;
-            globalVolume.priority = 0;
+            exposure = profile.Add<Exposure>(true);
         }
+        exposure.mode.Override(ExposureMode.Automatic);
+        exposure.compensation.Override(cameraExposureCompensation);
 
-        VolumeProfile profile = globalVolume.profile;
+        // Пост-экспозиция перед color grading (нейтральная, без тонировки).
+        if (!profile.TryGet<ColorAdjustments>(out ColorAdjustments colorAdjustments))
+        {
+            colorAdjustments = profile.Add<ColorAdjustments>(true);
+        }
+        colorAdjustments.postExposure.Override(ambientBoost);
 
-        // Ambient Occlusion
-        bool foundAO = profile.TryGet<ScreenSpaceAmbientOcclusion>(out ScreenSpaceAmbientOcclusion ao);
-        if (foundAO)
-            ao.intensity.Override(0f);
+        // Ambient Occlusion: почти выключаем, чтобы тёмные впадины не «съедали» модель.
+        if (!profile.TryGet<ScreenSpaceAmbientOcclusion>(out ScreenSpaceAmbientOcclusion ao))
+        {
+            ao = profile.Add<ScreenSpaceAmbientOcclusion>(true);
+        }
+        ao.intensity.Override(ambientOcclusionStrength);
 
-        // Color Adjustments — повышаем яркость
-        bool foundColor = profile.TryGet<ColorAdjustments>(out ColorAdjustments colorAdj);
-        if (foundColor)
-            colorAdj.postExposure.Override(ambientBoost);
-
-        // Bloom — немного для мягкости
-        bool foundBloom = profile.TryGet<Bloom>(out Bloom bloom);
-        if (foundBloom)
+        // Bloom: по умолчанию выключен.
+        if (!profile.TryGet<Bloom>(out Bloom bloom))
+        {
+            bloom = profile.Add<Bloom>(true);
+        }
+        if (enableBloom)
         {
             bloom.intensity.Override(0.15f);
             bloom.threshold.Override(0.9f);
         }
+        else
+        {
+            bloom.intensity.Override(0f);
+        }
 
-        Debug.Log("[HDRPAutoLighting] Ambient lighting fixed");
+        Debug.Log("[HDRPAutoLighting] Глобальный Volume настроен: compensation " +
+                  cameraExposureCompensation + " EV, postExposure " + ambientBoost + " EV");
     }
 
-    void FixCameraExposure()
+    private Volume FindGlobalVolume()
     {
-        // Настройка exposure через Exposure volume component
         Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsInactive.Include);
-        Volume globalVolume = null;
-
-        foreach (Volume vol in volumes)
+        for (int i = 0; i < volumes.Length; i++)
         {
-            if (vol.isGlobal)
+            if (volumes[i].isGlobal)
             {
-                globalVolume = vol;
-                break;
+                return volumes[i];
             }
         }
-
-        if (globalVolume == null)
-        {
-            globalVolume = new GameObject("ExposureVolume", typeof(Volume)).GetComponent<Volume>();
-            globalVolume.isGlobal = true;
-            globalVolume.priority = 1;
-        }
-
-        VolumeProfile profile = globalVolume.profile;
-        bool foundExposure = profile.TryGet<Exposure>(out Exposure exposure);
-        if (foundExposure)
-        {
-            exposure.compensation.Override(cameraExposureCompensation);
-        }
-
-        Debug.Log("[HDRPAutoLighting] Camera exposure: " + cameraExposureCompensation);
+        return null;
     }
+
+    #if UNITY_EDITOR
+    [UnityEditor.MenuItem("Tools/Robots/Apply Studio Lighting (HDRP)")]
+    static void MenuApplyStudioLighting()
+    {
+        HDRPAutoLighting instance = Object.FindAnyObjectByType<HDRPAutoLighting>();
+        if (instance == null)
+        {
+            GameObject go = new GameObject("HDRP Auto Lighting");
+            instance = go.AddComponent<HDRPAutoLighting>();
+        }
+        instance.Apply();
+        Debug.Log("[HDRPAutoLighting] Применено через меню Tools/Robots.");
+    }
+    #endif
 }

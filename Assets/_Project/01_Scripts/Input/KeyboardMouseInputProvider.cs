@@ -69,7 +69,7 @@ public class KeyboardMouseInputProvider : InputProvider
     private Camera ResolveCamera()
     {
         if (playerCamera == null)
-            playerCamera = Camera.main != null ? Camera.main : FindAnyObjectByType<Camera>();
+            playerCamera = Camera.main != null ? Camera.main : Object.FindAnyObjectByType<Camera>();
 
         if (playerCamera == null)
             Debug.LogWarning("[KeyboardMouseInputProvider] Camera not assigned and no camera found.");

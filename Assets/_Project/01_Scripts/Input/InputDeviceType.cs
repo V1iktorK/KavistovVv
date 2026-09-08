@@ -13,14 +13,17 @@ public enum InputDeviceType
     AR = 4
 }
 
+/// <summary>
+/// Конвертация между InputDeviceType и InputManager.InputDevice.
+/// </summary>
 public static class InputDeviceExtensions
 {
-    public static InputManager.InputDevice ToInputManagerDevice(this InputDeviceType type)
+    public static InputManager.InputDevice ToInputManagerDevice(InputDeviceType type)
     {
         return (InputManager.InputDevice)type;
     }
-    
-    public static InputDeviceType ToInputDeviceType(this InputManager.InputDevice type)
+
+    public static InputDeviceType ToInputDeviceType(InputManager.InputDevice type)
     {
         return (InputDeviceType)type;
     }

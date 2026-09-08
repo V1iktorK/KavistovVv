@@ -1,22 +1,23 @@
-// RobotController.cs — абстрактный базовый класс
 using UnityEngine;
 
-public class RobotController : MonoBehaviour // Убрали abstract
+/// <summary>
+/// Абстрактная основа всех контроллеров роботов.
+/// Реализует позиционный CCD (Cyclic Coordinate Descent) для суставов,
+/// разрешение ссылок на геометрию по именам и базовую телеметрию.
+/// </summary>
+public class RobotController : MonoBehaviour
 {
     [Header("Base")]
     public string robotName = "Robot";
     public Transform tcp;
     [Range(0.1f, 5f)] public float maxSpeed = 1f;
     [HideInInspector] public bool isActive = false;
-    
+
     [Header("Industry 4.0 - Telemetry")]
     public bool telemetryEnabled = true;
     public float jointTemperature = 25f;
     public float operatingHours = 0f;
-    
-    protected Vector3 targetPosition;
-    protected Quaternion targetRotation;
-    protected bool hasTarget;
+
     [Header("Automatic kinematics")]
     public Transform fixedBase;
     public Transform endEffector;
@@ -26,19 +27,29 @@ public class RobotController : MonoBehaviour // Убрали abstract
     [Range(1, 32)] public int ikIterations = 12;
     [Min(0.001f)] public float ikTolerance = 0.01f;
 
+    protected Vector3 targetPosition;
+    protected Quaternion targetRotation;
+    protected bool hasTarget;
+
     protected virtual void Awake()
     {
         targetPosition = transform.position;
         targetRotation = transform.rotation;
         ResolveKinematicReferences();
     }
-    
-    // Заменили abstract на virtual и добавили пустые реализации
-    public virtual void SetTarget(Vector3 position, Quaternion? rotation = null)
+
+    /// <summary>Задать цель только по позиции (ориентация не меняется).</summary>
+    public virtual void SetTarget(Vector3 position)
     {
         targetPosition = position;
-        if (rotation.HasValue) targetRotation = rotation.Value;
         hasTarget = true;
+    }
+
+    /// <summary>Задать цель по позиции и ориентации.</summary>
+    public virtual void SetTarget(Vector3 position, Quaternion rotation)
+    {
+        SetTarget(position);
+        targetRotation = rotation;
     }
 
     public virtual void MoveToTarget(float deltaTime)
@@ -92,38 +103,62 @@ public class RobotController : MonoBehaviour // Убрали abstract
     private void ResolveKinematicReferences()
     {
         Transform root = transform;
-        fixedBase = fixedBase != null ? fixedBase : FindChild(root, fixedBaseName) ?? root;
+        fixedBase = fixedBase != null ? fixedBase : FindChild(root, fixedBaseName);
+        if (fixedBase == null)
+        {
+            fixedBase = root;
+        }
+
         endEffector = endEffector != null
             ? endEffector
-            : FindChild(root, endEffectorName) ??
-              FindChild(root, alternativeEndEffectorName) ??
-              tcp ??
-              FindDeepestDescendant(root);
+            : FindChild(root, endEffectorName);
+        if (endEffector == null)
+        {
+            endEffector = FindChild(root, alternativeEndEffectorName);
+        }
+        if (endEffector == null)
+        {
+            endEffector = tcp;
+        }
+        if (endEffector == null)
+        {
+            endEffector = FindDeepestDescendant(root);
+        }
     }
 
+    /// <summary>Строит цепочку суставов от фланца вверх до фиксированной базы.</summary>
     private Transform[] BuildJointChain()
     {
-        var joints = new System.Collections.Generic.List<Transform>();
-        Transform current = endEffector != null ? endEffector.parent : null;
-        while (current != null && current != fixedBase)
+        Transform node = endEffector != null ? endEffector.parent : null;
+
+        int count = 0;
+        while (node != null && node != fixedBase)
         {
-            joints.Add(current);
-            current = current.parent;
+            count++;
+            node = node.parent;
         }
 
-        if (current != fixedBase)
+        if (node != fixedBase)
         {
-            return System.Array.Empty<Transform>();
+            return new Transform[0];
         }
 
-        joints.Reverse();
-        return joints.ToArray();
+        Transform[] chain = new Transform[count];
+        node = endEffector != null ? endEffector.parent : null;
+        for (int i = count - 1; i >= 0 && node != null && node != fixedBase; i--)
+        {
+            chain[i] = node;
+            node = node.parent;
+        }
+        return chain;
     }
 
+    /// <summary>Максимально глубокий потомок в иерархии (запасной end effector).</summary>
     protected static Transform FindDeepestDescendant(Transform root)
     {
         Transform deepest = null;
         int deepestLevel = -1;
+
         foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
         {
             if (child == root)
@@ -149,9 +184,10 @@ public class RobotController : MonoBehaviour // Убрали abstract
         return deepest;
     }
 
+    /// <summary>Прямой поиск потомка по точному имени.</summary>
     protected static Transform FindChild(Transform root, string objectName)
     {
-        if (root == null || string.IsNullOrEmpty(objectName))
+        if (root == null || objectName == null || objectName.Length == 0)
         {
             return null;
         }
@@ -169,27 +205,34 @@ public class RobotController : MonoBehaviour // Убрали abstract
 
     public virtual float[] GetJointAngles()
     {
-        return new float[0]; // Возвращаем пустой массив по умолчанию
+        return new float[0];
     }
-    
+
     public virtual void SetActive(bool active)
     {
         isActive = active;
-        foreach (var rend in GetComponentsInChildren<Renderer>(true))
+        foreach (Renderer renderer in GetComponentsInChildren<Renderer>(true))
         {
-            if (rend.material.HasProperty("_EmissionColor"))
+            if (renderer.material.HasProperty("_EmissionColor"))
             {
-                rend.material.SetColor("_EmissionColor", active ? Color.green * 0.3f : Color.black);
-                rend.material.EnableKeyword("_EMISSION");
+                renderer.material.SetColor(
+                    "_EmissionColor",
+                    active ? Color.green * 0.3f : Color.black);
+                renderer.material.EnableKeyword("_EMISSION");
             }
         }
     }
-    
+
     public virtual void UpdateTelemetry(float deltaTime)
     {
-        if (!telemetryEnabled) return;
+        if (!telemetryEnabled)
+        {
+            return;
+        }
+
         operatingHours += deltaTime / 3600f;
-        float movement = Vector3.Distance(tcp != null ? tcp.position : transform.position, targetPosition);
+        Vector3 reference = tcp != null ? tcp.position : transform.position;
+        float movement = Vector3.Distance(reference, targetPosition);
         jointTemperature = Mathf.Lerp(jointTemperature, 25f + movement * 50f, deltaTime * 0.05f);
     }
 }

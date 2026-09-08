@@ -20,15 +20,18 @@ public class TrajectoryRecorder : MonoBehaviour
     
     void Update()
     {
-        if (InputManager.Instance == null) return;
-        
+        if (InputManager.Instance == null)
+        {
+            return;
+        }
+
         if (InputManager.Instance.GrabDown)
         {
             if (!isRecording) StartRecording();
             else StopRecording();
         }
-        
-        if (isRecording && robot != null)
+
+        if (isRecording && robot != null && robot.tcp != null)
         {
             trajectory.Add(new TrajectoryPoint
             {
@@ -39,7 +42,7 @@ public class TrajectoryRecorder : MonoBehaviour
             });
         }
     }
-    
+
     public void StartRecording()
     {
         trajectory.Clear();
@@ -47,27 +50,40 @@ public class TrajectoryRecorder : MonoBehaviour
         startTime = Time.time;
         Debug.Log("[TrajectoryRecorder] ▶ Запись начата");
     }
-    
+
     public void StopRecording()
     {
         isRecording = false;
-        Debug.Log($"[TrajectoryRecorder] ⏹ Запись окончена. Точек: {trajectory.Count}");
-        
+        Debug.Log("[TrajectoryRecorder] ⏹ Запись окончена. Точек: " + trajectory.Count);
+
         if (SettingsData.Instance != null && SettingsData.Instance.autoSaveTrajectory)
+        {
             SaveToFile();
+        }
     }
-    
+
     public List<TrajectoryPoint> GetTrajectory() => trajectory;
-    
+
     void SaveToFile()
     {
-        string path = Path.Combine(
-            string.IsNullOrEmpty(SettingsData.Instance.trajectorySavePath) ? Application.persistentDataPath : SettingsData.Instance.trajectorySavePath,
-            $"trajectory_{System.DateTime.Now:yyyyMMdd_HHmmss}.json"
-        );
+        // Каталог: из настроек или persistentDataPath по умолчанию.
+        string directory = Application.persistentDataPath;
+        if (SettingsData.Instance != null &&
+            SettingsData.Instance.trajectorySavePath != null &&
+            SettingsData.Instance.trajectorySavePath.Length > 0)
+        {
+            directory = SettingsData.Instance.trajectorySavePath;
+        }
+
+        System.DateTime now = System.DateTime.Now;
+        string stamp = string.Format(
+            "{0:0000}{1:00}{2:00}_{3:00}{4:00}{5:00}",
+            now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second);
+        string path = Path.Combine(directory, "trajectory_" + stamp + ".json");
+
         string json = JsonUtility.ToJson(new TrajectoryDataWrapper { points = trajectory.ToArray() }, true);
         File.WriteAllText(path, json);
-        Debug.Log($"[TrajectoryRecorder] Сохранено: {path}");
+        Debug.Log("[TrajectoryRecorder] Сохранено: " + path);
     }
 }
 

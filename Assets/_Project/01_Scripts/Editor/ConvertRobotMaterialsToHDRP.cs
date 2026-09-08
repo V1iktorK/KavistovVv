@@ -11,7 +11,7 @@ using System.IO;
 /// </summary>
 public class ConvertRobotMaterialsToHDRP : EditorWindow
 {
-    private static readonly string[] TARGET_FBX_PATHS = new[]
+    private static readonly string[] TARGET_FBX_PATHS = new string[]
     {
         "Assets/Robots/Robot.fbx",
         "Assets/Robots/ScaraRobot.fbx"
@@ -26,7 +26,8 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
     [MenuItem("Tools/Robots/Convert Materials to HDRP/Lit", true)]
     public static bool ValidateConvert()
     {
-        return TARGET_FBX_PATHS.All(path => AssetDatabase.LoadAssetAtPath<MeshFilter>(path) != null);
+        // FBX загружается как GameObject, поэтому проверяем тип Object.
+        return TARGET_FBX_PATHS.All(path => AssetDatabase.LoadAssetAtPath<Object>(path) != null);
     }
 
     [ContextMenu("Convert Embedded Materials to HDRP/Lit")]
@@ -52,20 +53,25 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
             {
                 if (mf.sharedMesh == null) continue;
                 Material[] mats = mf.sharedMesh.sharedMaterials;
+                Material[] newMats = new Material[mats.Length];
+                bool changed = false;
                 for (int i = 0; i < mats.Length; i++)
                 {
+                    newMats[i] = mats[i];
                     if (mats[i] != null && IsStandardOrUnlit(mats[i]))
                     {
                         Material newMat = ConvertToHDRPLit(mats[i], fbxPath, i);
                         if (newMat != null)
                         {
-                            // Update the mesh's material reference
-                            Material[] newMats = mats.ToArray();
                             newMats[i] = newMat;
-                            mf.sharedMesh.sharedMaterials = newMats;
+                            changed = true;
                             convertedCount++;
                         }
                     }
+                }
+                if (changed)
+                {
+                    mf.sharedMesh.sharedMaterials = newMats;
                 }
             }
 
@@ -73,19 +79,25 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
             {
                 if (smr.sharedMesh == null) continue;
                 Material[] mats = smr.sharedMesh.sharedMaterials;
+                Material[] newMats = new Material[mats.Length];
+                bool changed = false;
                 for (int i = 0; i < mats.Length; i++)
                 {
+                    newMats[i] = mats[i];
                     if (mats[i] != null && IsStandardOrUnlit(mats[i]))
                     {
                         Material newMat = ConvertToHDRPLit(mats[i], fbxPath, i);
                         if (newMat != null)
                         {
-                            Material[] newMats = mats.ToArray();
                             newMats[i] = newMat;
-                            smr.sharedMesh.sharedMaterials = newMats;
+                            changed = true;
                             convertedCount++;
                         }
                     }
+                }
+                if (changed)
+                {
+                    smr.sharedMesh.sharedMaterials = newMats;
                 }
             }
 
@@ -121,11 +133,11 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
         if (oldMat == null) return null;
 
         string assetDir = Path.GetDirectoryName(AssetDatabase.GetAssetPath(oldMat));
-        if (string.IsNullOrEmpty(assetDir))
+        if (assetDir == null || assetDir.Length == 0)
             assetDir = Path.Combine("Assets", "Robots", "ConvertedMaterials");
 
         string newMatName = Path.GetFileName(fbxPath).Replace(".fbx", "") + "_Mat" + matIndex;
-        if (string.IsNullOrEmpty(oldMat.name) || oldMat.name == "No Name")
+        if ((oldMat.name == null || oldMat.name.Length == 0) || oldMat.name == "No Name")
             newMatName = Path.GetFileName(fbxPath).Replace(".fbx", "") + "_Mat" + matIndex;
         else
             newMatName = oldMat.name + "_HDRP";
@@ -149,9 +161,19 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
         newMat.name = newMatName;
 
         // Copy properties from old material to new HDRP/Lit material
-        // Base color
-        newMat.SetColor("_BaseColor", oldMat.GetColor("_Color"));
-        newMat.SetColor("_BaseColor", oldMat.GetColor("_BaseColor"));
+        // Base color: у Standard шейдера свойство называется _Color, у HDRP/Lit — _BaseColor
+        if (oldMat.HasProperty("_BaseColor"))
+        {
+            newMat.SetColor("_BaseColor", oldMat.GetColor("_BaseColor"));
+        }
+        else if (oldMat.HasProperty("_Color"))
+        {
+            newMat.SetColor("_BaseColor", oldMat.GetColor("_Color"));
+        }
+        else
+        {
+            newMat.SetColor("_BaseColor", Color.white);
+        }
 
         // Metallic
         if (oldMat.HasProperty("_MetallicGlossMap") && oldMat.GetTexture("_MetallicGlossMap") != null)

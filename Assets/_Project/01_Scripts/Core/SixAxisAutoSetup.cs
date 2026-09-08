@@ -4,10 +4,9 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Автоматически настраивает SixAxisController при запуске.
-/// Находит суставы по паттерну Axis1, Axis2, ... Axis6
-/// Добавляет InverseKinematics если его нет.
-/// Удаляет лишние скрипты (CollisionGuard, SpatialAnchorManager).
+/// Автоматически настраивает SixAxisController при запуске:
+/// находит суставы по паттерну Axis1..Axis6, добавляет InverseKinematics,
+/// удаляет лишние скрипты (CollisionGuard, SpatialAnchorManager).
 /// </summary>
 [ExecuteInEditMode]
 public class SixAxisAutoSetup : MonoBehaviour
@@ -18,29 +17,24 @@ public class SixAxisAutoSetup : MonoBehaviour
 
     void Start()
     {
-        if (!autoSetupOnStart) return;
-        Setup();
-    }
+        if (!autoSetupOnStart)
+        {
+            return;
+        }
 
-    void Update()
-    {
-        // Для отладки в редакторе
-        #if UNITY_EDITOR
-        if (UnityEditor.EditorApplication.isPlaying) return;
-        #endif
+        Setup();
     }
 
     public void Setup()
     {
         Debug.Log("[SixAxisAutoSetup] Настройка робота: " + name);
 
-        // Удаляем лишние компоненты
         if (removeExtraComponents)
         {
             RemoveExtraComponents();
         }
 
-        // Получаем или создаём SixAxisController
+        // Получаем или создаём SixAxisController.
         SixAxisController controller = GetComponent<SixAxisController>();
         if (controller == null)
         {
@@ -48,7 +42,7 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Создан SixAxisController");
         }
 
-        // Добавляем InverseKinematics если нет
+        // Добавляем InverseKinematics, если его нет.
         InverseKinematics ik = GetComponent<InverseKinematics>();
         if (ik == null)
         {
@@ -56,53 +50,54 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Добавлен InverseKinematics");
         }
 
-        // Находим суставы
+        // Находим суставы.
         Transform[] joints = FindJoints();
         controller.jointTransforms = joints;
         ik.joints = joints;
 
         if (joints.Length > 0)
         {
-            Debug.Log("[SixAxisAutoSetup] ✅ Найдено " + joints.Length + " суставов:");
+            Debug.Log("[SixAxisAutoSetup] Найдено " + joints.Length + " суставов:");
             for (int i = 0; i < joints.Length; i++)
             {
-                Debug.Log("   [" + (i + 1) + "] " + joints[i].name + " (parent: " + (joints[i].parent != null ? joints[i].parent.name : "null") + ")");
+                string parentName = joints[i].parent != null ? joints[i].parent.name : "null";
+                Debug.Log("   [" + (i + 1) + "] " + joints[i].name + " (parent: " + parentName + ")");
             }
         }
         else
         {
-            Debug.LogError("[SixAxisAutoSetup] ❌ Суставы НЕ найдены! Проверьте иерархию GameObject-ов под роботом.");
+            Debug.LogError("[SixAxisAutoSetup] Суставы НЕ найдены! Проверьте иерархию GameObject-ов под роботом.");
             Debug.LogError("[SixAxisAutoSetup] Суставы должны содержать 'Axis' в имени (Axis1, Axis2, ... Axis6)");
             return;
         }
 
-        // Находим base (первый GameObject без 'Axis' в имени)
+        // Находим base (первый GameObject без 'Axis' в имени).
         Transform baseTransform = FindBase();
         if (baseTransform != null)
         {
             controller.baseTransform = baseTransform;
             controller.fixedBase = baseTransform;
             ik.baseTransform = baseTransform;
-            Debug.Log("[SixAxisAutoSetup] ✅ Base: " + baseTransform.name);
+            Debug.Log("[SixAxisAutoSetup] Base: " + baseTransform.name);
         }
         else
         {
-            Debug.LogWarning("[SixAxisAutoSetup] ⚠️ Base не найден, используется корень");
+            Debug.LogWarning("[SixAxisAutoSetup] Base не найден, используется корень");
             controller.baseTransform = transform;
             controller.fixedBase = transform;
             ik.baseTransform = transform;
         }
 
-        // Находим endEffector (последний сустав или TCP)
+        // Находим endEffector (последний сустав или TCP).
         Transform endEffector = FindEndEffector(joints);
         if (endEffector != null)
         {
             controller.endEffector = endEffector;
             ik.endEffector = endEffector;
-            Debug.Log("[SixAxisAutoSetup] ✅ EndEffector: " + endEffector.name);
+            Debug.Log("[SixAxisAutoSetup] EndEffector: " + endEffector.name);
         }
 
-        // Создаём IKTarget
+        // Создаём IKTarget.
         if (ik.target == null)
         {
             GameObject targetGO = GameObject.Find(name + "_IKTarget");
@@ -113,10 +108,10 @@ public class SixAxisAutoSetup : MonoBehaviour
             }
             targetGO.transform.position = endEffector != null ? endEffector.position : Vector3.zero;
             ik.target = targetGO.transform;
-            Debug.Log("[SixAxisAutoSetup] ✅ IKTarget создан");
+            Debug.Log("[SixAxisAutoSetup] IKTarget создан");
         }
 
-        // Устанавливаем target position для теста
+        // Устанавливаем тестовую цель.
         if (endEffector != null)
         {
             Vector3 testTarget = endEffector.position + Vector3.forward * 0.5f;
@@ -124,7 +119,7 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Тестовая цель установлена: " + testTarget);
         }
 
-        Debug.Log("[SixAxisAutoSetup] ✅ Настройка завершена для " + name);
+        Debug.Log("[SixAxisAutoSetup] Настройка завершена для " + name);
     }
 
     Transform[] FindJoints()
@@ -133,8 +128,7 @@ public class SixAxisAutoSetup : MonoBehaviour
         Transform[] joints = new Transform[6];
         int found = 0;
 
-        // Ищем суставы по паттерну Axis1, Axis2, ... Axis6
-        // Поддерживаем варианты: Axis1, Axis1_1, Axis1_2, axis1, AXIS1
+        // Ищем суставы по паттерну Axis1..Axis6 (поддерживаем Axis1_1/Axis1_2/axis1 и т.д.).
         for (int axis = 1; axis <= 6 && found < 6; axis++)
         {
             string[] patterns =
@@ -152,81 +146,69 @@ public class SixAxisAutoSetup : MonoBehaviour
 
             foreach (Transform t in allTransforms)
             {
-                if (t == transform) continue; // пропускаем корень
-
-                foreach (string pattern in patterns)
+                if (t == transform)
                 {
-                    if (t.name.IndexOf(pattern, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                }
+
+                if (MatchesAny(t.name, patterns))
+                {
+                    // Проверяем, что это не родитель.
+                    bool isChild = t.parent != null && IsDescendantOf(t.parent, transform);
+                    if (isChild || t.parent == transform)
                     {
-                        // Проверяем, что это не родитель
-                        bool isChild = t.parent != null && IsDescendantOf(t.parent, transform);
-                        if (isChild || t.parent == transform)
-                        {
-                            joints[found++] = t;
-                            Debug.Log("[SixAxisAutoSetup]    Найден сустав " + axis + ": " + t.name);
-                            break;
-                        }
+                        joints[found++] = t;
+                        Debug.Log("[SixAxisAutoSetup]    Найден сустав " + axis + ": " + t.name);
+                        break;
                     }
                 }
             }
         }
 
-        // Фильтруем null
+        // Обрезаем пустые слоты.
         Transform[] result = new Transform[found];
-        System.Array.Copy(joints, result, found);
+        for (int i = 0; i < found; i++)
+        {
+            result[i] = joints[i];
+        }
         return result;
     }
 
     Transform FindBase()
     {
         Transform[] allTransforms = GetComponentsInChildren<Transform>(true);
-
-        // Ищем base по именам
         string[] basePatterns = { "base", "Base", "BASE", "root", "Root", "ROOT", "stand", "Stand", "STAND" };
 
         foreach (Transform t in allTransforms)
         {
-            if (t == transform) continue;
-
-            foreach (string pattern in basePatterns)
+            if (t == transform)
             {
-                if (t.name.IndexOf(pattern, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    // Проверяем, что это не сустав
-                    bool isJoint = false;
-                    for (int i = 1; i <= 6; i++)
-                    {
-                        if (t.name.IndexOf("Axis" + i, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            isJoint = true;
-                            break;
-                        }
-                    }
-
-                    if (!isJoint)
-                    {
-                        return t;
-                    }
-                }
+                continue;
             }
+
+            if (!MatchesAny(t.name, basePatterns))
+            {
+                continue;
+            }
+
+            // Проверяем, что это не сустав.
+            if (IsJointLike(t.name))
+            {
+                continue;
+            }
+
+            return t;
         }
 
-        // Если не нашли, используем первый GameObject без 'Axis' в имени
+        // Если не нашли, используем первый GameObject без 'Axis' в имени.
         foreach (Transform t in allTransforms)
         {
-            if (t == transform) continue;
-
-            bool isJoint = false;
-            for (int i = 1; i <= 6; i++)
+            if (t == transform)
             {
-                if (t.name.IndexOf("Axis" + i, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    isJoint = true;
-                    break;
-                }
+                continue;
             }
 
-            if (!isJoint)
+            if (!IsJointLike(t.name))
             {
                 return t;
             }
@@ -238,24 +220,22 @@ public class SixAxisAutoSetup : MonoBehaviour
     Transform FindEndEffector(Transform[] joints)
     {
         Transform[] allTransforms = GetComponentsInChildren<Transform>(true);
-
-        // Ищем TCP, flange, gripper
-        string[] eePatterns = { "TCP", "tcp", "Flange", "flange", "Gripper", "gripper", "EndEffector", "endEffector" };
+        string[] eePatterns = { "TCP", "Flange", "Gripper", "EndEffector" };
 
         foreach (Transform t in allTransforms)
         {
-            if (t == transform) continue;
-
-            foreach (string pattern in eePatterns)
+            if (t == transform)
             {
-                if (t.name.IndexOf(pattern, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return t;
-                }
+                continue;
+            }
+
+            if (MatchesAny(t.name, eePatterns))
+            {
+                return t;
             }
         }
 
-        // Если не нашли, используем последний сустав
+        // Если не нашли, используем последний сустав.
         if (joints.Length > 0)
         {
             return joints[joints.Length - 1];
@@ -264,12 +244,41 @@ public class SixAxisAutoSetup : MonoBehaviour
         return null;
     }
 
+    private static bool MatchesAny(string name, string[] patterns)
+    {
+        string lowerName = name.ToLower();
+        for (int i = 0; i < patterns.Length; i++)
+        {
+            if (name == patterns[i] || lowerName.IndexOf(patterns[i].ToLower()) >= 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsJointLike(string name)
+    {
+        string lowerName = name.ToLower();
+        for (int i = 1; i <= 6; i++)
+        {
+            if (lowerName.IndexOf("axis" + i) >= 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool IsDescendantOf(Transform potentialParent, Transform root)
     {
         Transform current = potentialParent;
         while (current != null)
         {
-            if (current == root) return true;
+            if (current == root)
+            {
+                return true;
+            }
             current = current.parent;
         }
         return false;
@@ -277,7 +286,6 @@ public class SixAxisAutoSetup : MonoBehaviour
 
     void RemoveExtraComponents()
     {
-        // Удаляем CollisionGuard
         CollisionGuard collisionGuard = GetComponent<CollisionGuard>();
         if (collisionGuard != null)
         {
@@ -285,7 +293,6 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Удалён CollisionGuard");
         }
 
-        // Удаляем SpatialAnchorManager
         SpatialAnchorManager spatialAnchor = GetComponent<SpatialAnchorManager>();
         if (spatialAnchor != null)
         {
@@ -293,7 +300,6 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Удалён SpatialAnchorManager");
         }
 
-        // Удаляем старый RobotController
         RobotController oldController = GetComponent<RobotController>();
         if (oldController != null && !oldController.GetType().Name.Contains("SixAxis"))
         {
@@ -314,7 +320,6 @@ public class SixAxisAutoSetup : MonoBehaviour
                 setup = Selection.activeGameObject.AddComponent<SixAxisAutoSetup>();
             }
             setup.Setup();
-            UnityEditor.Selection.activeGameObject = setup.gameObject;
         }
     }
     #endif

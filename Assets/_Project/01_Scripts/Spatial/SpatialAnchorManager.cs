@@ -1,58 +1,96 @@
 using UnityEngine;
 
+/// <summary>
+/// Управляет якорем размещения робота: сохраняет и восстанавливает
+/// и позицию, и поворот (PlayerPrefs), чтобы после перезапуска
+/// виртуальный робот совпадал с реальным.
+/// </summary>
 public class SpatialAnchorManager : MonoBehaviour
 {
     public static SpatialAnchorManager Instance;
-    
+
     [Header("Placement")]
     public Transform robotRoot;
     public GameObject placementIndicator;
-    
-    #pragma warning disable CS0414
-    private bool isPlaced = false;
-    #pragma warning disable CS0414
+
+    private const string KeyAnchorSaved = "AnchorSaved";
+    private const string KeyAnchorX = "AnchorX";
+    private const string KeyAnchorY = "AnchorY";
+    private const string KeyAnchorZ = "AnchorZ";
+    private const string KeyAnchorQx = "AnchorQx";
+    private const string KeyAnchorQy = "AnchorQy";
+    private const string KeyAnchorQz = "AnchorQz";
+    private const string KeyAnchorQw = "AnchorQw";
 
     void Awake() => Instance = this;
-    
+
     public void PlaceRobot(Vector3 position, Quaternion rotation)
     {
-        robotRoot.position = position;
-        robotRoot.rotation = rotation;
-        isPlaced = true;
-        
+        if (robotRoot != null)
+        {
+            robotRoot.position = position;
+            robotRoot.rotation = rotation;
+        }
+
         if (placementIndicator != null)
+        {
             placementIndicator.SetActive(false);
-        
-        PlayerPrefs.SetString("AnchorSaved", "true");
-        PlayerPrefs.SetFloat("AnchorX", position.x);
-        PlayerPrefs.SetFloat("AnchorY", position.y);
-        PlayerPrefs.SetFloat("AnchorZ", position.z);
+        }
+
+        PlayerPrefs.SetInt(KeyAnchorSaved, 1);
+        PlayerPrefs.SetFloat(KeyAnchorX, position.x);
+        PlayerPrefs.SetFloat(KeyAnchorY, position.y);
+        PlayerPrefs.SetFloat(KeyAnchorZ, position.z);
+        PlayerPrefs.SetFloat(KeyAnchorQx, rotation.x);
+        PlayerPrefs.SetFloat(KeyAnchorQy, rotation.y);
+        PlayerPrefs.SetFloat(KeyAnchorQz, rotation.z);
+        PlayerPrefs.SetFloat(KeyAnchorQw, rotation.w);
         PlayerPrefs.Save();
-        
-        Debug.Log($"[SpatialAnchor] Робот размещён: {position}");
+
+        Debug.Log("[SpatialAnchor] Робот размещён: " + position + ", " + rotation.eulerAngles);
     }
 
     public void Recalibrate()
     {
-        isPlaced = false;
-        PlayerPrefs.DeleteKey("AnchorSaved");
+        PlayerPrefs.DeleteKey(KeyAnchorSaved);
+        PlayerPrefs.Save();
+
         if (placementIndicator != null)
+        {
             placementIndicator.SetActive(true);
+        }
     }
-    
+
     void Start()
     {
-        if (PlayerPrefs.GetString("AnchorSaved", "") == "true")
+        RestoreSavedAnchor();
+    }
+
+    /// <summary>Восстанавливает сохранённый якорь (позиция + поворот).</summary>
+    private void RestoreSavedAnchor()
+    {
+        if (robotRoot == null || PlayerPrefs.GetInt(KeyAnchorSaved, 0) != 1)
         {
-            Vector3 pos = new Vector3(
-                PlayerPrefs.GetFloat("AnchorX"),
-                PlayerPrefs.GetFloat("AnchorY"),
-                PlayerPrefs.GetFloat("AnchorZ")
-            );
-            robotRoot.position = pos;
-            isPlaced = true;
-            if (placementIndicator != null)
-                placementIndicator.SetActive(false);
+            return;
+        }
+
+        Vector3 position = new Vector3(
+            PlayerPrefs.GetFloat(KeyAnchorX),
+            PlayerPrefs.GetFloat(KeyAnchorY),
+            PlayerPrefs.GetFloat(KeyAnchorZ));
+
+        Quaternion rotation = new Quaternion(
+            PlayerPrefs.GetFloat(KeyAnchorQx),
+            PlayerPrefs.GetFloat(KeyAnchorQy),
+            PlayerPrefs.GetFloat(KeyAnchorQz),
+            PlayerPrefs.GetFloat(KeyAnchorQw));
+
+        robotRoot.position = position;
+        robotRoot.rotation = rotation;
+
+        if (placementIndicator != null)
+        {
+            placementIndicator.SetActive(false);
         }
     }
 }
