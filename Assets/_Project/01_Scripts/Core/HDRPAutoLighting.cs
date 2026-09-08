@@ -19,30 +19,30 @@ public class HDRPAutoLighting : MonoBehaviour
 {
     [Header("Key light (ключевой свет над зоной роботов)")]
     public bool enableKeyLight = true;
-    [Tooltip("Дополняет существующее солнце, не заменяет его.")]
-    public float mainLightIntensity = 80000f;  // люкс
+    [Tooltip("Дополняет существующее солнце, не заменяет его. Мягкое значение.")]
+    public float mainLightIntensity = 25000f;  // люкс
     public Color keyLightColor = new Color(1f, 0.98f, 0.94f); // тёплый белый
     public float lightHeight = 4f;
     public float lightDistance = 4f;
 
     [Header("Fill light (заливающий свет)")]
-    public float fillLightIntensity = 30000f;   // люкс
+    public float fillLightIntensity = 10000f;   // люкс
     public Color fillColor = new Color(0.96f, 0.98f, 1f); // холодно-нейтральный белый
 
     [Header("Rim light (контровой свет)")]
-    public float rimLightIntensity = 20000f;    // люкс
+    public float rimLightIntensity = 8000f;    // люкс
 
     [Header("Зона освещения")]
     public Transform[] lightTargets;            // роботы/стол; если пусто — найдём роботов сами
     public Vector3 fallbackCenter = new Vector3(12f, 0f, -8f);
 
     [Header("Глобальная яркость (Volume)")]
-    [Tooltip("Пост-экспозиция перед color grading, в EV. Скромное значение, чтобы не выбелить.")]
-    public float ambientBoost = 0.2f;
-    [Tooltip("Компенсация авто-экспозиции, в EV.")]
-    public float cameraExposureCompensation = 0.5f;
+    [Tooltip("Пост-экспозиция перед color grading, в EV. Почти ноль, чтобы не выбелить.")]
+    public float ambientBoost = 0.05f;
+    [Tooltip("Компенсация авто-экспозиции, в EV. Почти ноль.")]
+    public float cameraExposureCompensation = 0.1f;
     [Tooltip("Сила ambient occlusion (0 — полностью выключена, тёмные впадины уходят).")]
-    public float ambientOcclusionStrength = 0.15f;
+    public float ambientOcclusionStrength = 0.1f;
     public bool enableBloom = false;
 
     private const string KeyLightName = "Cline_KeyLight";
