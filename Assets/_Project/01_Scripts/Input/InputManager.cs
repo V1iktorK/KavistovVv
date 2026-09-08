@@ -63,10 +63,12 @@ public class InputManager : MonoBehaviour
         if (Instance == null)
         {
             Instance = this;
-            return;
+            DontDestroyOnLoad(gameObject);
         }
-
-        Destroy(gameObject);
+        else
+        {
+            Destroy(gameObject);
+        }
     }
 
     void Start()
@@ -87,19 +89,18 @@ public class InputManager : MonoBehaviour
             {
                 SetInputDevice(InputDevice.VR);
             }
-            if (Keyboard.current.f3Key.wasPressedThisFrame)
+                    if (Keyboard.current.f3Key.wasPressedThisFrame)
             {
                 SetInputDevice(InputDevice.Gamepad);
             }
-            return;
         }
-
-        if (Input.GetKeyDown(KeyCode.F1)) SetInputDevice(InputDevice.KeyboardMouse);
-        if (Input.GetKeyDown(KeyCode.F2)) SetInputDevice(InputDevice.VR);
-        if (Input.GetKeyDown(KeyCode.F3)) SetInputDevice(InputDevice.Gamepad);
+        else
+        {
+            if (Input.GetKeyDown(KeyCode.F1)) SetInputDevice(InputDevice.KeyboardMouse);
+            if (Input.GetKeyDown(KeyCode.F2)) SetInputDevice(InputDevice.VR);
+            if (Input.GetKeyDown(KeyCode.F3)) SetInputDevice(InputDevice.Gamepad);
+        }
     }
-
-    public void SetInputDevice(InputDevice device)
     {
         if (activeProvider != null)
             activeProvider.enabled = false;
