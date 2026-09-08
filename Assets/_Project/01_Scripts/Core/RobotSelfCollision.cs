@@ -16,7 +16,6 @@ using UnityEngine;
 ///   (см. RobotConfig.IgnoredCollisionPairs);
 /// - включения столкновений с окружающей средой (рабочая поверхность, стол).
 /// </remarks>
-[RequireComponent(typeof(Collider))]
 public class RobotSelfCollision : MonoBehaviour
 {
     [Header("Joint chain (filled by SixAxisController)")]
