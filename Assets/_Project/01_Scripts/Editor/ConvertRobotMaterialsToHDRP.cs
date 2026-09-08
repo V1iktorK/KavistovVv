@@ -180,14 +180,16 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
         }
 
         // Metallic
-        if (oldMat.HasProperty("_MetallicGlossMap") && oldMat.GetTexture("_MetallicGlossMap") != null)
-        {
-            newMat.SetTexture("_MetallicGlossMap", oldMat.GetTexture("_MetallicGlossMap"));
-        }
+        // У Standard нет упакованной карты металл/AO/гладкость — используем только скаляры.
         newMat.SetFloat("_Metallic", oldMat.HasProperty("_Metallic") ? oldMat.GetFloat("_Metallic") : 0f);
-        newMat.SetFloat("_Smoothness", oldMat.HasProperty("_Smoothness") ? oldMat.GetFloat("_Smoothness") : 0.5f);
         if (oldMat.HasProperty("_Glossiness"))
+        {
             newMat.SetFloat("_Smoothness", oldMat.GetFloat("_Glossiness"));
+        }
+        else
+        {
+            newMat.SetFloat("_Smoothness", oldMat.HasProperty("_Smoothness") ? oldMat.GetFloat("_Smoothness") : 0.5f);
+        }
 
         // Normal map
         if (oldMat.HasProperty("_BumpMap") && oldMat.GetTexture("_BumpMap") != null)
@@ -195,9 +197,13 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
             newMat.SetTexture("_NormalMap", oldMat.GetTexture("_BumpMap"));
         }
         if (oldMat.HasProperty("_NormalScale"))
+        {
             newMat.SetFloat("_NormalScale", oldMat.GetFloat("_NormalScale"));
+        }
         if (oldMat.HasProperty("_BumpScale"))
+        {
             newMat.SetFloat("_NormalScale", oldMat.GetFloat("_BumpScale"));
+        }
 
         // Albedo/Color map
         if (oldMat.HasProperty("_MainTex") && oldMat.GetTexture("_MainTex") != null)
@@ -209,12 +215,6 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
             newMat.SetTexture("_BaseColorMap", oldMat.GetTexture("_BaseColorMap"));
         }
 
-        // Occlusion map
-        if (oldMat.HasProperty("_OcclusionMap") && oldMat.GetTexture("_OcclusionMap") != null)
-        {
-            newMat.SetTexture("_MaskMap", oldMat.GetTexture("_OcclusionMap"));
-        }
-
         // Emission
         if (oldMat.HasProperty("_EmissionColor") && oldMat.GetColor("_EmissionColor") != Color.black)
         {
@@ -224,7 +224,9 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
 
         // Alpha cutoff
         if (oldMat.HasProperty("_Cutoff"))
+        {
             newMat.SetFloat("_AlphaCutoff", oldMat.GetFloat("_Cutoff"));
+        }
 
         // Double-sided
         if (oldMat.doubleSidedGI)
@@ -239,8 +241,54 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
         AssetDatabase.CreateAsset(newMat, matPath);
         AssetDatabase.SaveAssets();
 
-        Debug.Log($"[ConvertRobotMaterials] Created HDRP/Lit material: {matPath}");
+        Debug.Log("[ConvertRobotMaterials] Created HDRP/Lit material: " + matPath);
         return newMat;
+    }
+
+    /// <summary>
+    /// Конвертирует материалы выделенных GameObject в HDRP/Lit.
+    /// Безопасно: не трогает уже-HDRP материалы, не меняет шейдеры ангара напрямую.
+    /// </summary>
+    [MenuItem("Tools/Robots/Convert Selected Materials to HDRP/Lit")]
+    public static void ConvertSelected()
+    {
+        int convertedCount = 0;
+        foreach (GameObject go in Selection.gameObjects)
+        {
+            if (go == null) continue;
+            Renderer[] renderers = go.GetComponentsInChildren<Renderer>(true);
+            foreach (Renderer renderer in renderers)
+            {
+                Material[] mats = renderer.sharedMaterials;
+                Material[] newMats = new Material[mats.Length];
+                bool changed = false;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    newMats[i] = mats[i];
+                    if (mats[i] != null && IsStandardOrUnlit(mats[i]))
+                    {
+                        Material newMat = ConvertToHDRPLit(mats[i], "Assets", i);
+                        if (newMat != null)
+                        {
+                            newMats[i] = newMat;
+                            changed = true;
+                            convertedCount++;
+                        }
+                    }
+                }
+                if (changed)
+                {
+                    renderer.sharedMaterials = newMats;
+                }
+            }
+        }
+        Debug.Log("[ConvertRobotMaterials] Converted " + convertedCount + " materials on selection.");
+    }
+
+    [MenuItem("Tools/Robots/Convert Selected Materials to HDRP/Lit", true)]
+    public static bool ValidateConvertSelected()
+    {
+        return Selection.gameObjects.Length > 0;
     }
 
     private static void UpdateFBXMetaForMaterialSeparation(string fbxPath)
