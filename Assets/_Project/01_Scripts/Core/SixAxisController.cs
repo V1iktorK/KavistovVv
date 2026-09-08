@@ -1,7 +1,7 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 /// <summary>
-/// Контроллер 6-осевого манипулятора на базе инверсной кинематики (InverseKinematics).
+/// Контроллер 6-осного манипулятора на базе инверсной кинематики (InverseKinematics).
 /// </summary>
 public class SixAxisController : RobotController
 {
@@ -11,32 +11,55 @@ public class SixAxisController : RobotController
     public Transform baseTransform;
     public string baseName = "LS10-B702S_base_1";
 
+    [Header("Smoothing")]
+    public float positionSmoothing = 0.85f;
+    public float rotationSmoothing = 0.9f;
+
+    [Header("Joint Limits")]
+    public Vector2[] jointLimits = new Vector2[6];
+
+    private Vector3 smoothedTargetPosition;
+    private Quaternion smoothedTargetRotation;
+    private bool smoothingInitialized;
+    private bool selfCollisionSetup;
+
     void Update()
     {
         ResolveRobotReferences();
+        SetupSelfCollision();
         MoveToTarget(Time.deltaTime);
+        ApplyJointLimits();
         UpdateTelemetry(Time.deltaTime);
+    }
+
+    private void SetupSelfCollision()
+    {
+        if (selfCollisionSetup || jointTransforms == null || jointTransforms.Length == 0)
+            return;
+
+        var collision = GetComponent<RobotSelfCollision>();
+        if (collision == null)
+            collision = gameObject.AddComponent<RobotSelfCollision>();
+
+        collision.jointTransforms = jointTransforms;
+        collision.disableSelfCollisions = true;
+        collision.jointColliderRadius = 0.08f;
+        selfCollisionSetup = true;
     }
 
     private void ResolveRobotReferences()
     {
         if (ik == null)
-        {
             ik = GetComponent<InverseKinematics>();
-        }
 
         Transform root = transform;
         if (baseTransform == null)
         {
             baseTransform = FindChild(root, baseName);
             if (baseTransform == null)
-            {
                 baseTransform = FindChild(root, "Root");
-            }
             if (baseTransform == null)
-            {
                 baseTransform = root;
-            }
         }
         fixedBase = baseTransform;
 
@@ -44,25 +67,21 @@ public class SixAxisController : RobotController
         {
             endEffector = FindChild(root, endEffectorName);
             if (endEffector == null)
-            {
                 endEffector = FindChild(root, alternativeEndEffectorName);
-            }
             if (endEffector == null)
-            {
                 endEffector = FindDeepestDescendant(root);
-            }
         }
 
         if (jointTransforms == null || jointTransforms.Length == 0)
         {
             jointTransforms = new Transform[]
             {
-                FirstNonNull(FindChild(root, "Axis1_2"), FindChild(root, "Axis1")),
-                FirstNonNull(FindChild(root, "Axis2_2"), FindChild(root, "Axis2")),
-                FirstNonNull(FindChild(root, "Axis3_2"), FindChild(root, "Axis3")),
-                FirstNonNull(FindChild(root, "Axis4_2"), FindChild(root, "Axis4")),
-                FirstNonNull(FindChild(root, "Axis5_2"), FindChild(root, "Axis5")),
-                FirstNonNull(FindChild(root, "Axis6_2"), FindChild(root, "Axis6"))
+                FirstNullOr(FindChild(root, "Axis1_2"), FindChild(root, "Axis1")),
+                FirstNullOr(FindChild(root, "Axis2_2"), FindChild(root, "Axis2")),
+                FirstNullOr(FindChild(root, "Axis3_2"), FindChild(root, "Axis3")),
+                FirstNullOr(FindChild(root, "Axis4_2"), FindChild(root, "Axis4")),
+                FirstNullOr(FindChild(root, "Axis5_2"), FindChild(root, "Axis5")),
+                FirstNullOr(FindChild(root, "Axis6_2"), FindChild(root, "Axis6"))
             };
         }
 
@@ -71,29 +90,58 @@ public class SixAxisController : RobotController
             ik.baseTransform = baseTransform;
             ik.endEffector = endEffector;
             if (ik.joints == null || ik.joints.Length == 0)
-            {
                 ik.joints = jointTransforms;
-            }
+            ik.positionThreshold = ikTolerance;
+            ik.orientationThreshold = 1f;
+            ik.maxIterations = ikIterations;
         }
+        InitializeJointLimits();
+    }
+
+    private void InitializeJointLimits()
+    {
+        if (jointLimits.Length < 6)
+            jointLimits = new Vector2[6];
+        jointLimits[0] = new Vector2(-170f, 170f);
+        jointLimits[1] = new Vector2(-90f, 150f);
+        jointLimits[2] = new Vector2(-70f, 225f);
+        jointLimits[3] = new Vector2(-180f, 180f);
+        jointLimits[4] = new Vector2(-120f, 120f);
+        jointLimits[5] = new Vector2(-180f, 180f);
     }
 
     public override void SetTarget(Vector3 position)
     {
-        targetPosition = position;
-        hasTarget = true;
-        if (ik != null && ik.target != null)
+        if (!smoothingInitialized)
         {
-            ik.target.position = targetPosition;
+            smoothedTargetPosition = position;
+            smoothedTargetRotation = Quaternion.identity;
+            smoothingInitialized = true;
         }
+        smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, position, 1f - positionSmoothing);
+        if (ik != null && ik.target != null)
+            ik.target.position = smoothedTargetPosition;
+        targetPosition = smoothedTargetPosition;
+        hasTarget = true;
     }
 
     public override void SetTarget(Vector3 position, Quaternion rotation)
     {
-        SetTarget(position);
-        targetRotation = rotation;
+        if (!smoothingInitialized)
+        {
+            smoothedTargetPosition = position;
+            smoothedTargetRotation = rotation;
+            smoothingInitialized = true;
+        }
+        smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, position, 1f - positionSmoothing);
+        smoothedTargetRotation = Quaternion.Slerp(smoothedTargetRotation, rotation, 1f - rotationSmoothing);
+        targetPosition = smoothedTargetPosition;
+        targetRotation = smoothedTargetRotation;
+        hasTarget = true;
         if (ik != null && ik.target != null)
         {
-            ik.target.rotation = targetRotation;
+            ik.target.position = smoothedTargetPosition;
+            ik.target.rotation = smoothedTargetRotation;
         }
     }
 
@@ -105,27 +153,39 @@ public class SixAxisController : RobotController
             ik.Solve(deltaTime);
         }
         else
-        {
             base.MoveToTarget(deltaTime);
+    }
+
+    private void ApplyJointLimits()
+    {
+        if (jointTransforms == null || jointTransforms.Length == 0 || jointLimits.Length == 0)
+            return;
+
+        for (int i = 0; i < jointTransforms.Length && i < jointLimits.Length; i++)
+        {
+            if (jointTransforms[i] == null)
+                continue;
+
+            Vector3 angles = jointTransforms[i].localEulerAngles;
+            float rawY = angles.y;
+            float normalized = rawY > 180f ? rawY - 360f : rawY;
+            float clamped = Mathf.Clamp(normalized, jointLimits[i].x, jointLimits[i].y);
+            float smoothed = Mathf.Lerp(normalized, clamped, 0.5f);
+            jointTransforms[i].localEulerAngles = new Vector3(angles.x, smoothed, angles.z);
         }
     }
 
     public override float[] GetJointAngles()
     {
         if (jointTransforms == null)
-        {
             return new float[0];
-        }
-
         float[] angles = new float[jointTransforms.Length];
         for (int i = 0; i < jointTransforms.Length; i++)
-        {
             angles[i] = jointTransforms[i] != null ? jointTransforms[i].localEulerAngles.y : 0f;
-        }
         return angles;
     }
 
-    private static Transform FirstNonNull(Transform first, Transform second)
+    private static Transform FirstNullOr(Transform first, Transform second)
     {
         return first != null ? first : second;
     }
