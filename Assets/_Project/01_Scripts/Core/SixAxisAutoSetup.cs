@@ -52,31 +52,33 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] Добавлен InverseKinematics");
         }
 
-        // Находим суставы.
-        Transform[] joints = FindJoints();
-        controller.jointTransforms = joints;
-        ik.joints = joints;
-
-        if (joints.Length > 0)
+        // Суставы: если уже заданы в инспекторе (корректная настройка) — не перезаписываем,
+        // иначе AutoSetup подменяет оси (Axis1..Axis6) на меши (Axis1_2..) и робот ломается.
+        Transform[] joints = controller.jointTransforms;
+        bool alreadyConfigured = joints != null && joints.Length > 0;
+        if (!alreadyConfigured)
         {
-            Debug.Log("[SixAxisAutoSetup] Найдено " + joints.Length + " суставов:");
-            for (int i = 0; i < joints.Length; i++)
-            {
-                string parentName = joints[i].parent != null ? joints[i].parent.name : "null";
-                Debug.Log("   [" + (i + 1) + "] " + joints[i].name + " (parent: " + parentName + ")");
-            }
+            joints = FindJoints();
+            controller.jointTransforms = joints;
         }
-        else
+
+        if (joints == null || joints.Length == 0)
         {
             Debug.LogError("[SixAxisAutoSetup] Суставы НЕ найдены! Проверьте иерархию GameObject-ов под роботом.");
             Debug.LogError("[SixAxisAutoSetup] Суставы должны содержать 'Axis' в имени (Axis1, Axis2, ... Axis6)");
             return;
         }
 
-        // Находим base (первый GameObject без 'Axis' в имени).
+        if (ik.joints == null || ik.joints.Length == 0)
+            ik.joints = joints;
+
+        // Base: не затираем уже назначенную базу, если она — предок end effector.
         Transform baseTransform = FindBase();
         if (baseTransform != null)
         {
+            Transform ee = FindEndEffector(joints);
+            if (ee != null && !IsAncestorOf(baseTransform, ee))
+                baseTransform = transform; // «Root» — декоративная тумба, а не кинематическая база
             controller.baseTransform = baseTransform;
             controller.fixedBase = baseTransform;
             ik.baseTransform = baseTransform;
@@ -283,6 +285,18 @@ public class SixAxisAutoSetup : MonoBehaviour
                 return true;
             }
             current = current.parent;
+        }
+        return false;
+    }
+
+    /// <summary>True, если candidate — предок target (или равен ему).</summary>
+    private static bool IsAncestorOf(Transform candidate, Transform target)
+    {
+        Transform t = target;
+        while (t != null)
+        {
+            if (t == candidate) return true;
+            t = t.parent;
         }
         return false;
     }

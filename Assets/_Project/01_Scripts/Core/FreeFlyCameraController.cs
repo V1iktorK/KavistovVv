@@ -202,6 +202,22 @@ public class FreeFlyCameraController : MonoBehaviour
         }
     }
 
+    private bool IsPointerOverUI()
+    {
+        try
+        {
+            if (UnityEngine.EventSystems.EventSystem.current != null &&
+                UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
+            {
+                return true;
+            }
+        }
+        catch
+        {
+        }
+        return false;
+    }
+
     private Vector2 ReadMouseDelta()
     {
         try
@@ -350,6 +366,7 @@ public class FreeFlyCameraController : MonoBehaviour
 
         bool lmbDown = IsMouseButtonDownThisFrame(0);
         bool rmbDown = IsMouseButtonDownThisFrame(1);
+        bool overUI = IsPointerOverUI();
 
         // Esc освобождает курсор (возврат в UI/меню).
         bool escDown = (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
@@ -361,8 +378,9 @@ public class FreeFlyCameraController : MonoBehaviour
         }
 
         // Клик по окну Game при свободном курсоре → захват мыши (FPS-режим).
+        // Если клик пришёлся на UI-канвас — не захватываем (работают кнопки).
         bool justCaptured = false;
-        if (Cursor.lockState != CursorLockMode.Locked && (lmbDown || rmbDown) && Application.isFocused)
+        if (Cursor.lockState != CursorLockMode.Locked && (lmbDown || rmbDown) && !overUI && Application.isFocused)
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
@@ -520,9 +538,9 @@ public class FreeFlyCameraController : MonoBehaviour
     }
 
     /// <summary>
-    /// ЛКМ применяет цели лазеров: КРАСНАЯ (левая рука) ведёт SCARA,
-    /// ЗЕЛЁНАЯ (правая рука) ведёт шестиосевого робота (SixAxis).
-    /// Если нужный тип робота отсутствует — используется робот под лучом.
+    /// ЛКМ ведёт ВЫБРАННОГО (активного) робота к точке прицеливания.
+    /// Если активного нет — выбирается робот под прицелом.
+    /// Лазеры (Z/X) — только визуальные указатели, от цвета лазера управление не зависит.
     /// </summary>
     private void HandleClickActions()
     {
@@ -531,44 +549,19 @@ public class FreeFlyCameraController : MonoBehaviour
         primaryButtonWasPressed = currentlyPressed;
         if (!clicked) return;
 
-        // Какая рука «активна» для этого клика.
-        bool redActive = leftHandEnabled;   // красный лазер (левая)
-        bool greenActive = rightHandEnabled; // зелёный лазер (правая)
+        // Клик по кнопке UI — не телеоперация.
+        if (IsPointerOverUI()) return;
 
-        SixAxisController six = FindFirstSixAxis();
-        SCARAController scara = FindFirstScara();
+        // 1) Сначала — активный (выбранный F / деревом) робот.
+        RobotController selectedRobot = FindActiveRobot();
 
-        // Точка назначения: попадание луча в поверхность, иначе TCP робота.
-        Vector3 targetPoint = aimHitSurface
-            ? aimPoint
-            : transform.position + transform.forward * laserLength;
-
-        bool handled = false;
-
-        // Зелёный (правый) лазер управляет шестиосевым.
-        if (greenActive && six != null)
+        // 2) Затем — робот, на которого смотрит прицел.
+        if (selectedRobot == null)
         {
-            six.SetActive(true);
-            six.SetTarget(targetPoint);
-            handled = true;
-            Debug.Log($"[DesktopTeleoperation] SixAxis '{six.name}' → цель {targetPoint} (зелёный лазер).");
+            selectedRobot = aimHitSurface
+                ? FindPreferredRobotController(FindAnyRobotTransformNearAim())
+                : null;
         }
-
-        // Красный (левый) лазер управляет SCARA.
-        if (redActive && scara != null)
-        {
-            scara.SetActive(true);
-            scara.SetTarget(targetPoint);
-            handled = true;
-            Debug.Log($"[DesktopTeleoperation] SCARA '{scara.name}' → цель {targetPoint} (красный лазер).");
-        }
-
-        if (handled) return;
-
-        // Запасной вариант: робот под лучом (лазеры выключены или тип не найден).
-        RobotController selectedRobot = aimHitSurface
-            ? FindPreferredRobotController(FindAnyRobotTransformNearAim())
-            : null;
         if (selectedRobot == null)
         {
             selectedRobot = FindRobotNearRay(transform.position, transform.forward, laserLength);
@@ -582,32 +575,23 @@ public class FreeFlyCameraController : MonoBehaviour
         if (selectedRobot == null) return;
 
         selectedRobot.SetActive(true);
-        Vector3 robotTcp = GetRobotTcpPosition(selectedRobot);
-        Vector3 posTarget = aimHitSurface ? aimPoint : robotTcp;
+
+        Vector3 posTarget = aimHitSurface
+            ? aimPoint
+            : GetRobotTcpPosition(selectedRobot);
+
         selectedRobot.SetTarget(posTarget);
-        Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} assigned to {selectedRobot.name} (fallback).");
+        Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} assigned to {selectedRobot.name}.");
     }
 
-    private static SixAxisController FindFirstSixAxis()
+    private static RobotController FindActiveRobot()
     {
-        SixAxisController[] all = Object.FindObjectsByType<SixAxisController>(FindObjectsInactive.Include);
-        if (all == null || all.Length == 0) return null;
-        foreach (SixAxisController s in all)
+        RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+        foreach (RobotController rc in robots)
         {
-            if (s != null && s.isActive) return s;
+            if (rc != null && rc.isActive) return rc;
         }
-        return all[0];
-    }
-
-    private static SCARAController FindFirstScara()
-    {
-        SCARAController[] all = Object.FindObjectsByType<SCARAController>(FindObjectsInactive.Include);
-        if (all == null || all.Length == 0) return null;
-        foreach (SCARAController s in all)
-        {
-            if (s != null && s.isActive) return s;
-        }
-        return all[0];
+        return null;
     }
 
     /// <summary>

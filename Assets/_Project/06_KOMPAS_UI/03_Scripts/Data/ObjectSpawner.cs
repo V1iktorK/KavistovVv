@@ -16,8 +16,24 @@ namespace KompasUI
     /// </summary>
     public class ObjectSpawner : MonoBehaviour
     {
-        [Header("Робот для копирования (если пусто — ищется в сцене)")]
-        public RobotController robotTemplate;
+        [Header("Шаблоны роботов (заполняются из сцены)")]
+        public RobotController[] robotTemplates;
+
+        /// <summary>Находит все шаблоны роботов в сцене (оригиналы, не RegisteredObject-копии).</summary>
+        public RobotController[] RefreshRobotTemplates()
+        {
+            var all = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+            var list = new System.Collections.Generic.List<RobotController>();
+            foreach (RobotController rc in all)
+            {
+                if (rc == null) continue;
+                // Не берём уже размещённые через UI копии (у них есть RegisteredObject).
+                if (rc.GetComponent<RegisteredObject>() != null) continue;
+                list.Add(rc);
+            }
+            robotTemplates = list.ToArray();
+            return robotTemplates;
+        }
 
         /// <summary>Спавнит стол (примитив-куб) в точке.</summary>
         public RegisteredObject SpawnTable(Vector3 position, Vector3? upNormal = null)
@@ -37,27 +53,23 @@ namespace KompasUI
             return reg;
         }
 
-        /// <summary>Спавнит копию робота (шаблон — первый найденный в сцене).</summary>
-        public RegisteredObject SpawnRobot(Vector3 position)
+        /// <summary>Спавнит копию робота-шаблона с поворотом вокруг вертикали (yaw, градусы).</summary>
+        public RegisteredObject SpawnRobot(Vector3 position, float yawDegrees)
         {
-            if (robotTemplate == null)
+            if (robotTemplates == null || robotTemplates.Length == 0)
+                RefreshRobotTemplates();
+            if (robotTemplates == null || robotTemplates.Length == 0)
             {
-                RobotController[] robots = Object.FindObjectsByType<RobotController>(
-                    FindObjectsInactive.Include);
-                if (robots.Length == 0)
-                {
-                    Debug.LogWarning("[KompasUI] Нет робота-шаблона для копирования.");
-                    return null;
-                }
-                robotTemplate = robots[0];
+                Debug.LogWarning("[KompasUI] Нет робота-шаблона для копирования.");
+                return null;
             }
 
-            GameObject copy = Object.Instantiate(robotTemplate.gameObject);
-            copy.name = robotTemplate.robotName + "_копия_" + System.DateTime.Now.ToString("HHmmss");
+            GameObject copy = Object.Instantiate(robotTemplates[0].gameObject);
+            copy.name = robotTemplates[0].robotName + "_" + System.DateTime.Now.ToString("HHmmss");
             copy.transform.position = position;
-            copy.transform.rotation = Quaternion.identity;
+            copy.transform.rotation = Quaternion.Euler(0f, yawDegrees, 0f);
 
-            // Подчищаем лишний автоконфигуратор, чтобы он не перетирал настройки копии.
+            // Подчищаем автоконфигуратор, чтобы он не перетирал настройки копии.
             SixAxisAutoSetup auto = copy.GetComponent<SixAxisAutoSetup>();
             if (auto != null) Object.Destroy(auto);
 

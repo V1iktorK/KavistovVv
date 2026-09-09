@@ -11,8 +11,8 @@ namespace KompasUI
     public class IdleCameraBrain : MonoBehaviour
     {
         [Header("Настройки простоя")]
-        [Tooltip("Через сколько секунд бездействия включится облёт")]
-        public float idleDelay = 8f;
+        [Tooltip("Через сколько секунд бездействия включится облёт (600 = 10 минут)")]
+        public float idleDelay = 600f;
         [Tooltip("Радиус облёта вокруг робота")]
         public float orbitRadius = 6f;
         [Tooltip("Высота камеры над базой робота")]

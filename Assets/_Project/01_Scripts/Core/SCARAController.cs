@@ -31,6 +31,21 @@ public class SCARAController : RobotController
         base.Awake();
         ResolveJoints();
         CacheGeometry();
+        EnsureCableFollow();
+    }
+
+    /// <summary>Автоматически подключает кабель (LS10-B702S_cable_2) к точке J2_4.</summary>
+    private void EnsureCableFollow()
+    {
+        Transform cable = FindChild(new string[] { "LS10-B702S_cable_2", "cable_2" });
+        if (cable == null) return;
+        if (cable.GetComponent<KompasUI.ScaraCableFollow>() != null) return;
+
+        var follow = cable.gameObject.AddComponent<KompasUI.ScaraCableFollow>();
+        follow.baseAnchor = baseTransform != null ? baseTransform : transform;
+        follow.followTarget = joint2; // LS10-B702S_J2_4
+        follow.cable = cable;
+        Debug.Log("[SCARA] Кабель подключён к точке " + (joint2 != null ? joint2.name : "J2_4"));
     }
 
     private void Update()

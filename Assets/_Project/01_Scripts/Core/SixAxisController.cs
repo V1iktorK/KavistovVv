@@ -71,16 +71,8 @@ public class SixAxisController : RobotController
             ik = GetComponent<InverseKinematics>();
 
         Transform root = transform;
-        if (baseTransform == null)
-        {
-            baseTransform = FindChild(root, baseName);
-            if (baseTransform == null)
-                baseTransform = FindChild(root, "Root");
-            if (baseTransform == null)
-                baseTransform = root;
-        }
-        fixedBase = baseTransform;
 
+        // --- endEffector ---
         if (endEffector == null)
         {
             endEffector = FindChild(root, endEffectorName);
@@ -97,18 +89,36 @@ public class SixAxisController : RobotController
             tcp = endEffector;
         }
 
+        // --- base: должна быть ПРЕДКОМ endEffector, иначе IK-цепь не строится ---
+        if (baseTransform == null)
+        {
+            baseTransform = FindChild(root, baseName);
+            if (baseTransform == null)
+                baseTransform = FindChild(root, "Root");
+            if (baseTransform == null)
+                baseTransform = root;
+        }
+        if (endEffector != null && !IsAncestorOf(baseTransform, endEffector))
+        {
+            // Root в этой модели — декоративная тумба (брат оси), а не кинематическая база.
+            baseTransform = root;
+        }
+        fixedBase = baseTransform;
+
+        // --- суставы: если не заданы или указывают на меши — нормализуем ---
         if (jointTransforms == null || jointTransforms.Length == 0)
         {
             jointTransforms = new Transform[]
             {
-                FirstNonNull(FindChild(root, "Axis1_2"), FindChild(root, "Axis1")),
-                FirstNullOr(FindChild(root, "Axis2_2"), FindChild(root, "Axis2")),
-                FirstNullOr(FindChild(root, "Axis3_2"), FindChild(root, "Axis3")),
-                FirstNullOr(FindChild(root, "Axis4_2"), FindChild(root, "Axis4")),
-                FirstNullOr(FindChild(root, "Axis5_2"), FindChild(root, "Axis5")),
-                FirstNullOr(FindChild(root, "Axis6_2"), FindChild(root, "Axis6"))
+                FindAxis(root, 1),
+                FindAxis(root, 2),
+                FindAxis(root, 3),
+                FindAxis(root, 4),
+                FindAxis(root, 5),
+                FindAxis(root, 6)
             };
         }
+        NormalizeJointTransforms();
 
         if (ik != null)
         {
@@ -128,9 +138,76 @@ public class SixAxisController : RobotController
         }
     }
 
+    /// <summary>Ищет «настоящую» ось AxisN (приоритет — точное имя, не меш AxisN_2).</summary>
+    private static Transform FindAxis(Transform root, int n)
+    {
+        string plain = "Axis" + n;
+        string[] all = { plain, plain.ToLower(), "AXIS" + n };
+        foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+        {
+            foreach (string name in all)
+            {
+                if (t != root && t.name == name)
+                    return t;
+            }
+        }
+        // fallback: AxisN_2/_1
+        string[] suffixed = { plain + "_2", plain + "_1" };
+        foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+        {
+            foreach (string name in suffixed)
+            {
+                if (t != root && t.name == name)
+                    return t;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Если суставы указывают на меши (AxisN_2/_1) — поднимаемся к их родителю-оси.</summary>
+    private void NormalizeJointTransforms()
+    {
+        if (jointTransforms == null) return;
+        for (int i = 0; i < jointTransforms.Length; i++)
+        {
+            Transform j = jointTransforms[i];
+            if (j == null) continue;
+            // Меши вида AxisN_2/_1 — дети настоящих осей AxisN
+            while (j.parent != null &&
+                   (j.name.EndsWith("_2") || j.name.EndsWith("_1")) &&
+                   j.parent.name.StartsWith("Axis"))
+            {
+                j = j.parent;
+            }
+            jointTransforms[i] = j;
+        }
+    }
+
+    /// <summary>True, если candidate — предок target (или равен ему).</summary>
+    private static bool IsAncestorOf(Transform candidate, Transform target)
+    {
+        Transform t = target;
+        while (t != null)
+        {
+            if (t == candidate) return true;
+            t = t.parent;
+        }
+        return false;
+    }
+
     private void InitializeJointLimits()
     {
-        if (jointLimits == null || jointLimits.Length < 6)
+        // Если массив пуст/мал ИЛИ все лимиты нулевые (битые значения из инспектора) —
+        // заполняем рабочими дефолтами.
+        bool allZero = jointLimits != null && jointLimits.Length >= 6;
+        if (allZero)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                if (jointLimits[i].x != 0f || jointLimits[i].y != 0f) { allZero = false; break; }
+            }
+        }
+        if (jointLimits == null || jointLimits.Length < 6 || allZero)
             jointLimits = new Vector2[6];
 
         jointLimits[0] = new Vector2(-170f, 170f);
@@ -387,15 +464,5 @@ public class SixAxisController : RobotController
         for (int i = 0; i < jointTransforms.Length; i++)
             angles[i] = jointTransforms[i] != null ? jointTransforms[i].localEulerAngles.y : 0f;
         return angles;
-    }
-
-    private static Transform FirstNonNull(Transform first, Transform second)
-    {
-        return first != null ? first : second;
-    }
-
-    private static Transform FirstNullOr(Transform first, Transform second)
-    {
-        return first != null ? first : second;
     }
 }

@@ -18,9 +18,12 @@ namespace KompasUI
     public class KompasUIManager : MonoBehaviour
     {
         [Header("Положение канваса перед пользователем")]
-        public float canvasDistance = 2.2f;
-        public float canvasHeight = 1.35f;
-        public float canvasWidth = 2.6f;
+        [Tooltip("Дистанция канваса от камеры, метры")]
+        public float canvasDistance = 1.6f;
+        [Tooltip("Физическая высота канваса, метры (1280x720 пропорция)")]
+        public float canvasHeight = 0.9f;
+        [Tooltip("Физическая ширина канваса, метры")]
+        public float canvasWidth = 1.6f;
 
         [Header("Опции")]
         public bool autoRebuildTree = true;
@@ -76,6 +79,15 @@ namespace KompasUI
 
             RuntimeRegistry.RebuildFromScene();
             RuntimeRegistry.Changed += OnRegistryChanged;
+
+            // Раскрываем роботов по умолчанию, чтобы дерево выглядело как в Unity.
+            foreach (ProjectNode root in RuntimeRegistry.Roots)
+            {
+                if (root.Kind == KompasNodeKind.Robot && treePanel != null)
+                    treePanel.Expand(root.Id);
+            }
+
+            if (spawner != null) spawner.RefreshRobotTemplates();
             SelectNode(RuntimeRegistry.Roots.Count > 0 ? RuntimeRegistry.Roots[0] : null);
         }
 
@@ -141,6 +153,7 @@ namespace KompasUI
 
             treePanel = gameObject.AddComponent<TreePanel>();
             treePanel.Build(canvasRect, SelectNode);
+            treePanel.BindRootProvider(RebuildTree);
 
             propertiesPanel = gameObject.AddComponent<PropertiesPanel>();
             propertiesPanel.Build(canvasRect);
@@ -202,15 +215,13 @@ namespace KompasUI
             Camera cam = MainCamera;
             if (cam == null || canvasRect == null) return;
 
-            // Не «приклеиваем» жёстко: канва остаётся на месте, только мягко
-            // доворачивается к камере, если пользователь далеко отошёл.
-            Vector3 toCanvas = canvasRect.position - cam.transform.position;
-            if (toCanvas.sqrMagnitude > (canvasDistance * 1.5f) * (canvasDistance * 1.5f))
-            {
-                Vector3 pos = cam.transform.position + cam.transform.forward * canvasDistance;
-                pos.y = cam.transform.position.y - 0.25f;
-                canvasRect.position = Vector3.Lerp(canvasRect.position, pos, Time.deltaTime * 2f);
-            }
+            // Канвас ВСЕГДА перед камерой: повторяет её позицию/поворот с фиксированным
+            // смещением (чуть ниже взгляда, чтобы не перекрывать обзор роботов).
+            Vector3 desiredPos = cam.transform.position
+                                  + cam.transform.forward * canvasDistance
+                                  + cam.transform.up * (-0.12f);
+            canvasRect.position = desiredPos;
+            canvasRect.rotation = cam.transform.rotation;
         }
 
         /// <summary>Следит за «активным» роботом: клик по нему открывает свойства справа.</summary>
@@ -251,10 +262,34 @@ namespace KompasUI
             if (centerWindow == null || centerWindow.ActiveKind == SpawnKind.None) return;
 
             // Esc — отмена размещения.
-            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            bool escDown = (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+                           || (Keyboard.current == null && TryLegacyKeyDown(KeyCode.Escape));
+            if (escDown)
             {
                 centerWindow.StartPlacement(SpawnKind.None);
                 return;
+            }
+
+            // Вращение направления робота: ←/→, A/D, геймпад (левый стик X).
+            if (centerWindow.ActiveKind == SpawnKind.Robot)
+            {
+                float rot = 0f;
+                if (Keyboard.current != null)
+                {
+                    if (Keyboard.current.leftArrowKey.isPressed || Keyboard.current.aKey.isPressed) rot -= 90f;
+                    if (Keyboard.current.rightArrowKey.isPressed || Keyboard.current.dKey.isPressed) rot += 90f;
+                }
+                else
+                {
+                    try
+                    {
+                        if (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A)) rot -= 90f;
+                        if (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) rot += 90f;
+                    }
+                    catch { }
+                }
+                if (rot != 0f)
+                    centerWindow.RotateRobot(rot * Time.deltaTime);
             }
 
             Camera cam = MainCamera;
@@ -263,28 +298,70 @@ namespace KompasUI
             Ray ray = GetAimRay(cam);
             bool hit = Physics.Raycast(ray, out RaycastHit hitInfo, 200f,
                 ~0, QueryTriggerInteraction.Ignore);
-            Vector3 point = hit ? hitInfo.point : ray.origin + ray.direction * 10f;
-            bool valid = hit && hitInfo.normal.y > 0.3f;
 
-            centerWindow.UpdatePreview(point, valid);
+            // Для робота цель — ЦЕНТР стола, если под прицелом стол.
+            Vector3 placePoint;
+            bool valid;
+            if (hit && centerWindow.ActiveKind == SpawnKind.Robot && TryFindTableCenter(hitInfo, out Vector3 tableCenter))
+            {
+                placePoint = tableCenter;
+                valid = true;
+            }
+            else
+            {
+                placePoint = hit ? hitInfo.point : ray.origin + ray.direction * 10f;
+                valid = hit && hitInfo.normal.y > 0.3f;
+            }
+
+            centerWindow.UpdatePreview(placePoint, valid);
 
             bool confirm = (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
-                || (Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame);
+                || (Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame)
+                || (Gamepad.current != null && Gamepad.current.buttonSouth.wasPressedThisFrame);
             if (!confirm || !valid) return;
 
-            ConfirmPlacement(point);
+            ConfirmPlacement(placePoint);
+        }
+
+        /// <summary>
+        /// Ищет «стол» под точкой попадания: объект-стол (RegisteredObject/имя содержит стол)
+        /// либо плоская горизонтальная поверхность. Возвращает ЦЕНТР верхней плоскости стола.
+        /// </summary>
+        private static bool TryFindTableCenter(RaycastHit hit, out Vector3 center)
+        {
+            center = hit.point;
+            Collider col = hit.collider;
+            if (col == null) return false;
+
+            bool looksLikeTable = false;
+            RegisteredObject reg = col.GetComponentInParent<RegisteredObject>();
+            string name = col.transform.root.name.ToLowerInvariant();
+
+            if (reg != null) looksLikeTable = true;
+            else if (name.Contains("стол") || name.Contains("table") || name.Contains("desk")) looksLikeTable = true;
+
+            // Не считаем столом пол/уровень (слишком большие плоскости).
+            if (name.Contains("plane") || name.Contains("floor") || name.Contains("level"))
+                looksLikeTable = false;
+
+            if (!looksLikeTable) return false;
+
+            Bounds b = col.bounds;
+            center = new Vector3(b.center.x, b.max.y, b.center.z);
+            return true;
         }
 
         private void ConfirmPlacement(Vector3 point)
         {
             SpawnKind kind = centerWindow.ActiveKind;
+            float yaw = kind == SpawnKind.Robot ? centerWindow.RobotYaw : 0f;
             centerWindow.StartPlacement(SpawnKind.None);
 
             if (spawner == null) return;
 
             RegisteredObject spawned = kind == SpawnKind.Table
                 ? spawner.SpawnTable(point)
-                : spawner.SpawnRobot(point);
+                : spawner.SpawnRobot(point, yaw);
 
             if (spawned == null) return;
 
@@ -298,6 +375,12 @@ namespace KompasUI
             RuntimeRegistry.Roots.Add(node);
             RuntimeRegistry.NotifyChanged();
             SelectNode(node);
+        }
+
+        private static bool TryLegacyKeyDown(KeyCode code)
+        {
+            try { return Input.GetKeyDown(code); }
+            catch { return false; }
         }
 
         private static Ray GetAimRay(Camera cam)
