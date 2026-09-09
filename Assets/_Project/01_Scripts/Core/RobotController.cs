@@ -124,6 +124,13 @@ public class RobotController : MonoBehaviour
         {
             endEffector = FindDeepestDescendant(root);
         }
+
+        // Если tcp не назначен в инспекторе — берём endEffector, чтобы
+        // телеметрия и телеоперация не падали с UnassignedReferenceException.
+        if (tcp == null)
+        {
+            tcp = endEffector;
+        }
     }
 
     /// <summary>Строит цепочку суставов от фланца вверх до фиксированной базы.</summary>

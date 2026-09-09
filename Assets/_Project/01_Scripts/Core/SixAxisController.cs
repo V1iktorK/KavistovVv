@@ -89,6 +89,13 @@ public class SixAxisController : RobotController
                 endEffector = FindDeepestDescendant(root);
         }
 
+        // tcp не назначен в инспекторе → берём фланец (endEffector),
+        // чтобы телеоперация/телеметрия не падали с UnassignedReferenceException.
+        if (tcp == null)
+        {
+            tcp = endEffector;
+        }
+
         if (jointTransforms == null || jointTransforms.Length == 0)
         {
             jointTransforms = new Transform[]

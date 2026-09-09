@@ -435,11 +435,7 @@ public class FreeFlyCameraController : MonoBehaviour
                 transform.position += move;
             }
         }
-        // Если есть коллайдер — слегка прижимаем камеру к поверхности (не проходим сквозь пол).
-        if (body != null && enableCameraCollision)
-        {
-            body.Move(Vector3.down * 0.05f * Time.deltaTime);
-        }
+        // Гравитации/прижима к полу нет — камера остаётся на своей высоте.
     }
 
     /// <summary>Обновляет лучи обеих рук так, чтобы они сходились в точке прицеливания на поверхности.</summary>
@@ -548,9 +544,8 @@ public class FreeFlyCameraController : MonoBehaviour
 
         selectedRobot.SetActive(true);
 
-        Vector3 posTarget = selectedRobot.tcp != null
-            ? selectedRobot.tcp.position
-            : selectedRobot.transform.position;
+        Vector3 robotTcp = GetRobotTcpPosition(selectedRobot);
+        Vector3 posTarget = robotTcp;
 
         // Левая рука (красная) — позиция TCP.
         if (leftHandEnabled && aimHitSurface)
@@ -563,7 +558,7 @@ public class FreeFlyCameraController : MonoBehaviour
         if (rightHandEnabled)
         {
             Vector3 orientPoint = aimHitSurface ? aimPoint : transform.position + transform.forward * laserLength;
-            Vector3 lookDir = (orientPoint - selectedRobot.tcp.position).normalized;
+            Vector3 lookDir = (orientPoint - robotTcp).normalized;
             if (lookDir.sqrMagnitude > 0.001f)
             {
                 rotTarget = Quaternion.LookRotation(lookDir, Vector3.up);
@@ -572,6 +567,18 @@ public class FreeFlyCameraController : MonoBehaviour
 
         selectedRobot.SetTarget(posTarget, rotTarget);
         Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} rot={rotTarget.eulerAngles} assigned to {selectedRobot.name} (leftHand={leftHandEnabled}, rightHand={rightHandEnabled}).");
+    }
+
+    /// <summary>
+    /// Безопасная точка TCP робота: tcp → endEffector → корень.
+    /// Не падает, если поле tcp не назначено в инспекторе.
+    /// </summary>
+    private static Vector3 GetRobotTcpPosition(RobotController robot)
+    {
+        if (robot == null) return Vector3.zero;
+        if (robot.tcp != null) return robot.tcp.position;
+        if (robot.endEffector != null) return robot.endEffector.position;
+        return robot.transform.position;
     }
 
     /// <summary>Циклически выбирает следующего робота в сцене (клавиша F).</summary>
