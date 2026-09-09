@@ -230,8 +230,8 @@ public class FreeFlyCameraController : MonoBehaviour
             transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
         }
 
-        leftLaser = CreateLaser();
-        rightLaser = CreateLaser();
+        leftLaser = CreateLaser("Laser_LeftHand");
+        rightLaser = CreateLaser("Laser_RightHand");
 
         if (enableCameraCollision)
         {
@@ -247,10 +247,25 @@ public class FreeFlyCameraController : MonoBehaviour
         }
     }
 
-    /// <summary>Создаёт новый, гарантированно отдельный LineRenderer для руки.</summary>
-    private LineRenderer CreateLaser()
+    /// <summary>
+    /// Создаёт LineRenderer на ОТДЕЛЬНОМ дочернем GameObject.
+    /// ВАЖНО: Unity 6 не позволяет добавить второй LineRenderer на тот же GameObject
+    /// (AddComponent возвращает null) — поэтому у каждой руки свой носитель.
+    /// </summary>
+    private LineRenderer CreateLaser(string childName)
     {
-        var lr = gameObject.AddComponent<LineRenderer>();
+        var holder = new GameObject(childName);
+        holder.transform.SetParent(transform, false);
+        holder.transform.localPosition = Vector3.zero;
+        holder.transform.localRotation = Quaternion.identity;
+
+        var lr = holder.AddComponent<LineRenderer>();
+        if (lr == null)
+        {
+            Debug.LogError("[FreeFlyCamera] Не удалось создать LineRenderer на '" + childName + "'.");
+            return null;
+        }
+
         lr.positionCount = 2;
         lr.useWorldSpace = true;
         lr.startWidth = 0.018f;
