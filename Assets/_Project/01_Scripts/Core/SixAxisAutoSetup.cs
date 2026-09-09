@@ -14,6 +14,8 @@ public class SixAxisAutoSetup : MonoBehaviour
     [Header("Debug")]
     public bool autoSetupOnStart = true;
     public bool removeExtraComponents = true;
+    [Tooltip("При старте НЕ двигать робота (тестовая цель выключена по умолчанию)")]
+    public bool applyTestTargetOnStartup = false;
 
     void Start()
     {
@@ -111,8 +113,9 @@ public class SixAxisAutoSetup : MonoBehaviour
             Debug.Log("[SixAxisAutoSetup] IKTarget создан");
         }
 
-        // Устанавливаем тестовую цель.
-        if (endEffector != null)
+        // Устанавливаем тестовую цель (только при явном запросе, не при старте),
+        // чтобы робот не «уезжал» сам сразу после запуска Play.
+        if (applyTestTargetOnStartup && endEffector != null)
         {
             Vector3 testTarget = endEffector.position + Vector3.forward * 0.5f;
             controller.SetTarget(testTarget);

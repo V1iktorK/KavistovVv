@@ -237,25 +237,43 @@ public class SixAxisController : RobotController
         }
     }
 
-    /// <summary>Ищет первую пару не-соседних звеньев, капсулы которых пересекаются.</summary>
+    /// <summary>
+    /// Ищет первую пару НЕ-соседних физических звеньев, капсулы которых пересекаются.
+    /// Совпадающие оси (Axis4 == Axis5 в запястье 6-осевого робота) схлопываются
+    /// в один узел — иначе сегменты, сходящиеся в одной точке, всегда «пересекаются».
+    /// </summary>
     private bool TryFindSelfCollision(out int indexA, out int indexB)
     {
         indexA = -1;
         indexB = -1;
         if (jointTransforms == null) return false;
 
-        for (int i = 0; i < jointTransforms.Length - 1; i++)
+        // 1. Строим цепочку уникальных узлов (пропускаем оси, совпадающие с предыдущей).
+        var nodes = new System.Collections.Generic.List<Vector3>();
+        var nodeJoints = new System.Collections.Generic.List<int>(); // исходный индекс для узла
+        const float mergeEpsilonSqr = 1e-8f;
+        for (int i = 0; i < jointTransforms.Length; i++)
         {
             if (jointTransforms[i] == null) continue;
-            for (int k = i + 1; k < jointTransforms.Length; k++)
-            {
-                if (jointTransforms[k] == null) continue;
-                if (k == i + 1) continue; // соседние звенья соединены — игнорируем
+            Vector3 p = jointTransforms[i].position;
+            if (nodes.Count > 0 && (p - nodes[nodes.Count - 1]).sqrMagnitude < mergeEpsilonSqr)
+                continue; // та же точка (совпадающие оси запястья) — один узел
+            nodes.Add(p);
+            nodeJoints.Add(i);
+        }
 
-                if (SegmentsOverlap(jointTransforms, i, k, linkRadius))
+        if (nodes.Count < 3) return false;
+
+        // 2. Звенья = отрезки между соседними уникальными узлами.
+        // Проверяем только пары звеньев, которые НЕ делят узел (b >= a+3).
+        for (int a = 0; a < nodes.Count - 2; a++)
+        {
+            for (int b = a + 3; b < nodes.Count; b++)
+            {
+                if (SegmentsOverlap(nodes[a], nodes[a + 1], nodes[b - 1], nodes[b], linkRadius))
                 {
-                    indexA = i;
-                    indexB = k;
+                    indexA = nodeJoints[a];
+                    indexB = nodeJoints[b];
                     return true;
                 }
             }
@@ -263,13 +281,8 @@ public class SixAxisController : RobotController
         return false;
     }
 
-    private static bool SegmentsOverlap(Transform[] joints, int i, int k, float radius)
+    private static bool SegmentsOverlap(Vector3 a1, Vector3 a2, Vector3 b1, Vector3 b2, float radius)
     {
-        Vector3 a1 = joints[i].position;
-        Vector3 a2 = i + 1 < joints.Length ? joints[i + 1].position : a1 + joints[i].up * 0.1f;
-        Vector3 b1 = joints[k].position;
-        Vector3 b2 = k + 1 < joints.Length ? joints[k + 1].position : b1 + joints[k].up * 0.1f;
-
         return ClosestDistanceBetweenSegments(a1, a2, b1, b2) < radius * 2f;
     }
 

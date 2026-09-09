@@ -159,6 +159,49 @@ public class FreeFlyCameraController : MonoBehaviour
         }
     }
 
+    private bool IsMouseButtonDownThisFrame(int button)
+    {
+        try
+        {
+            if (Input.GetMouseButtonDown(button))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        if (Mouse.current != null)
+        {
+            switch (button)
+            {
+                case 0:
+                    if (Mouse.current.leftButton.wasPressedThisFrame) return true;
+                    break;
+                case 1:
+                    if (Mouse.current.rightButton.wasPressedThisFrame) return true;
+                    break;
+                case 2:
+                    if (Mouse.current.middleButton.wasPressedThisFrame) return true;
+                    break;
+            }
+        }
+        return false;
+    }
+
+    private bool TryLegacyKeyDown(KeyCode code)
+    {
+        try
+        {
+            return Input.GetKeyDown(code);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private Vector2 ReadMouseDelta()
     {
         try
@@ -187,8 +230,8 @@ public class FreeFlyCameraController : MonoBehaviour
             transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
         }
 
-        EnsureLaserComponent(ref leftLaser);
-        EnsureLaserComponent(ref rightLaser);
+        leftLaser = CreateLaser();
+        rightLaser = CreateLaser();
 
         if (enableCameraCollision)
         {
@@ -204,32 +247,26 @@ public class FreeFlyCameraController : MonoBehaviour
         }
     }
 
-    private void EnsureLaserComponent(ref LineRenderer laser)
+    /// <summary>Создаёт новый, гарантированно отдельный LineRenderer для руки.</summary>
+    private LineRenderer CreateLaser()
     {
-        // Лазеры добавляются как отдельные компоненты, чтобы левая и правая
-        // руки не делили один и тот же LineRenderer.
-        var existing = GetComponents<LineRenderer>();
-        LineRenderer found = null;
-        foreach (var lr in existing)
-        {
-            if (lr != null && object.ReferenceEquals(lr, laser))
-            {
-                found = lr;
-                break;
-            }
-        }
-        if (found == null)
-        {
-            found = gameObject.AddComponent<LineRenderer>();
-        }
+        var lr = gameObject.AddComponent<LineRenderer>();
+        lr.positionCount = 2;
+        lr.useWorldSpace = true;
+        lr.startWidth = 0.018f;
+        lr.endWidth = 0.006f;
+        lr.enabled = false;
 
-        found.positionCount = 2;
-        found.useWorldSpace = true;
-        found.startWidth = 0.018f;
-        found.endWidth = 0.006f;
-        found.material = new Material(Shader.Find("Sprites/Default"));
-        found.enabled = false;
-        laser = found;
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader != null)
+        {
+            lr.material = new Material(shader);
+        }
+        else
+        {
+            Debug.LogWarning("[FreeFlyCamera] Шейдер Sprites/Default не найден — лазер без материала.");
+        }
+        return lr;
     }
 
     void Start()
@@ -271,26 +308,6 @@ public class FreeFlyCameraController : MonoBehaviour
 
     void Update()
     {
-        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
-        {
-            Cursor.lockState = Cursor.lockState == CursorLockMode.Locked ? CursorLockMode.None : CursorLockMode.Locked;
-            Cursor.visible = Cursor.lockState == CursorLockMode.None;
-        }
-        else if (Keyboard.current == null)
-        {
-            try
-            {
-                if (Input.GetKeyDown(KeyCode.Escape))
-                {
-                    Cursor.lockState = Cursor.lockState == CursorLockMode.Locked ? CursorLockMode.None : CursorLockMode.Locked;
-                    Cursor.visible = Cursor.lockState == CursorLockMode.None;
-                }
-            }
-            catch
-            {
-            }
-        }
-
         bool gamepadMode = IsGamepadActive();
 
         // Переключаемое управление геймпадом: клавиша G (на клавиатуре),
@@ -316,16 +333,32 @@ public class FreeFlyCameraController : MonoBehaviour
         else if (gamepadMode && Gamepad.current != null && Gamepad.current.leftShoulder.wasPressedThisFrame)
             SelectNextRobot();
 
-        bool rightMouseHeld = IsMouseButtonPressed(1);
-        bool lookFromMouse = rightMouseHeld;
+        bool lmbDown = IsMouseButtonDownThisFrame(0);
+        bool rmbDown = IsMouseButtonDownThisFrame(1);
+
+        // Esc освобождает курсор (возврат в UI/меню).
+        bool escDown = (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+                       || (Keyboard.current == null && TryLegacyKeyDown(KeyCode.Escape));
+        if (escDown && Cursor.lockState == CursorLockMode.Locked)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        // Клик по окну Game при свободном курсоре → захват мыши (FPS-режим).
+        bool justCaptured = false;
+        if (Cursor.lockState != CursorLockMode.Locked && (lmbDown || rmbDown) && Application.isFocused)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            justCaptured = true;
+            primaryButtonWasPressed = true; // этот клик не считаем телеоперацией
+        }
+
+        // В захваченном состоянии мышь вращает камеру (без удержания ПКМ).
+        bool lookFromMouse = Cursor.lockState == CursorLockMode.Locked && !justCaptured;
         if (lookFromMouse)
         {
-            if (Cursor.lockState != CursorLockMode.Locked)
-            {
-                Cursor.lockState = CursorLockMode.Locked;
-                Cursor.visible = false;
-            }
-
             Vector2 delta = ReadMouseDelta();
             float mouseX = delta.x;
             float mouseY = delta.y * (invertY ? 1f : -1f);
