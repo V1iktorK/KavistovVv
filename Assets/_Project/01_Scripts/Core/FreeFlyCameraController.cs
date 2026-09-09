@@ -16,11 +16,13 @@ using UnityEngine.InputSystem;
 ///        Правая (зелёная) — наведение ориентации TCP (куда «смотрит» инструмент).
 ///  3) Маленький коллайдер (CharacterController) на камере: камера врезается
 ///     в стены/текстуры, но не проходит сквозь них.
-///  4) G — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
-///     свободен (можно нажимать кнопки панелей), повторное G/клик по миру —
-///     захват мыши и телеоперация.
-///  5) Управление геймпадом (стики) активно, когда геймпад подключён и курсор
-///     захвачен (телеоперация). Кнопка G для геймпада больше не используется.
+///  4) TAB — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
+///     свободен (можно нажимать кнопки панелей). Клик по UI курсор НЕ прячет;
+///     клик по рабочему пространству (миру) — возврат к захваченному курсору
+///     (положение «до нажатия TAB»).
+///  5) G — ФОНАРИК (spot-свет на камере), включение/выключение.
+///  6) Управление геймпадом (стики) активно, когда геймпад подключён и курсор
+///     захвачен (телеоперация); тумблер — R3 (нажатие правого стика).
 /// </summary>
 [RequireComponent(typeof(Camera))]
 public class FreeFlyCameraController : MonoBehaviour
@@ -63,8 +65,16 @@ public class FreeFlyCameraController : MonoBehaviour
     public float bodyHeight = 1.6f;
     public float bodySkin = 0.02f;
 
-    [Header("Gamepad control (toggle G / right stick)")]
+    [Header("Gamepad control (toggle R3)")]
     public float gamepadLookSensitivity = 1.5f;
+
+    [Header("Flashlight (G)")]
+    public bool enableFlashlight = true;
+    public bool flashlightEnabled = false;
+    public float flashlightIntensity = 4500f;
+    public float flashlightRange = 18f;
+    public float flashlightAngle = 38f;
+    public float flashlightTemperature = 5200f;
 
     private float yaw;
     private float pitch;
@@ -73,6 +83,7 @@ public class FreeFlyCameraController : MonoBehaviour
     private bool primaryButtonWasPressed;
     private CharacterController body;
     private bool gamepadMove;
+    private Light flashlight;
 
     // Точка прицеливания (куда смотрит оператор) — на поверхности.
     private Vector3 aimPoint;
@@ -92,6 +103,7 @@ public class FreeFlyCameraController : MonoBehaviour
                 case KeyCode.E: return Keyboard.current.eKey.isPressed;
                 case KeyCode.LeftShift: return Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
                 case KeyCode.Escape: return Keyboard.current.escapeKey.wasPressedThisFrame;
+                case KeyCode.Tab: return Keyboard.current.tabKey.wasPressedThisFrame;
                 case KeyCode.Z: return Keyboard.current.zKey.wasPressedThisFrame;
                 case KeyCode.X: return Keyboard.current.xKey.wasPressedThisFrame;
                 case KeyCode.G: return Keyboard.current.gKey.wasPressedThisFrame;
@@ -111,6 +123,7 @@ public class FreeFlyCameraController : MonoBehaviour
                 case KeyCode.E: return Input.GetKey(KeyCode.E);
                 case KeyCode.LeftShift: return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
                 case KeyCode.Escape: return Input.GetKeyDown(KeyCode.Escape);
+                case KeyCode.Tab: return Input.GetKeyDown(KeyCode.Tab);
                 case KeyCode.Z: return Input.GetKeyDown(KeyCode.Z);
                 case KeyCode.X: return Input.GetKeyDown(KeyCode.X);
                 case KeyCode.G: return Input.GetKeyDown(KeyCode.G);
@@ -252,6 +265,8 @@ public class FreeFlyCameraController : MonoBehaviour
         leftLaser = CreateLaser("Laser_LeftHand");
         rightLaser = CreateLaser("Laser_RightHand");
 
+        CreateFlashlight();
+
         if (enableCameraCollision)
         {
             body = GetComponent<CharacterController>();
@@ -264,6 +279,39 @@ public class FreeFlyCameraController : MonoBehaviour
             body.skinWidth = bodySkin;
             body.center = new Vector3(0f, bodyHeight * 0.5f, 0f);
         }
+    }
+
+    /// <summary>
+    /// Фонарик на камере (G). Только источник света, без модельки.
+    /// </summary>
+    private void CreateFlashlight()
+    {
+        if (!enableFlashlight) return;
+
+        GameObject holder = new GameObject("Flashlight");
+        holder.transform.SetParent(transform, false);
+        holder.transform.localPosition = new Vector3(0f, -0.05f, 0.05f);
+        holder.transform.localRotation = Quaternion.identity;
+
+        var light = holder.AddComponent<Light>();
+        light.type = LightType.Spot;
+        light.intensity = flashlightIntensity;
+        light.range = flashlightRange;
+        light.spotAngle = flashlightAngle;
+        light.colorTemperature = flashlightTemperature;
+        light.useColorTemperature = true;
+        light.shadows = LightShadows.Soft;
+        light.enabled = false; // выключен до первого G
+        flashlight = light;
+    }
+
+    /// <summary>Переключить фонарик (G).</summary>
+    private void ToggleFlashlight()
+    {
+        if (flashlight == null) return;
+        flashlightEnabled = !flashlightEnabled;
+        flashlight.enabled = flashlightEnabled;
+        Debug.Log("[FreeFlyCamera] Фонарик: " + (flashlightEnabled ? "ВКЛ" : "ВЫКЛ"));
     }
 
     /// <summary>
@@ -344,15 +392,16 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         bool gamepadMode = IsGamepadActive();
 
-        // G — переключение ВИДИМОГО КУРСОРА (режим работы с UI/панелями).
+        // TAB — переключение ВИДИМОГО КУРСОРА (режим работы с UI/панелями).
         // Захваченный курсор = телеоперация; свободный видимый курсор = UI.
-        if (IsKeyPressed(KeyCode.G))
+        // Клик по UI курсор не прячет; клик по миру — возврат к захвату.
+        if (IsKeyPressed(KeyCode.Tab))
         {
             if (Cursor.lockState == CursorLockMode.Locked)
             {
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
-                Debug.Log("[FreeFlyCamera] Курсор освобождён (режим UI). G/клик по миру — обратно в телеоперацию.");
+                Debug.Log("[FreeFlyCamera] Курсор освобождён (режим UI). TAB/клик по миру — обратно в телеоперацию.");
             }
             else
             {
@@ -361,8 +410,15 @@ public class FreeFlyCameraController : MonoBehaviour
                 Debug.Log("[FreeFlyCamera] Курсор захвачен (телеоперация).");
             }
         }
+
+        // G — фонарик (toggle).
+        if (IsKeyPressed(KeyCode.G))
+        {
+            ToggleFlashlight();
+        }
+
         // Геймпад: стики активны только в телеоперации (курсор захвачен).
-        // R3 (нажатие правого стика) по-прежнему включает/выключает геймпад-управление.
+        // R3 (нажатие правого стика) включает/выключает геймпад-управление.
         if (gamepadMode && Gamepad.current != null && Gamepad.current.rightStickButton.wasPressedThisFrame)
         {
             gamepadMove = !gamepadMove;

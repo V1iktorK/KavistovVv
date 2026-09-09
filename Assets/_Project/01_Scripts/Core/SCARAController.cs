@@ -29,8 +29,10 @@ public class SCARAController : RobotController
     [SerializeField] private string joint3Name = "LS10-B702S_z_5";
 
     [Header("Vertical travel (Z prismatic)")]
-    public float ZMin = -0.3f;
-    public float ZMax = 0.3f;
+    [Tooltip("Максимальное ОПУСКАНИЕ z_5 от стартовой высоты (не даёт «нырять» под базу)")]
+    public float ZMin = -0.06f;
+    [Tooltip("Максимальный ПОДЪЁМ z_5 от стартовой высоты")]
+    public float ZMax = 0.18f;
 
     // --- DH-параметры (замеренные) ---
     private Vector3 verticalAxis;      // ось Z DH (вертикаль базы)
@@ -52,7 +54,12 @@ public class SCARAController : RobotController
         EnsureCableFollow();
     }
 
-    /// <summary>Автоматически подключает кабель (LS10-B702S_cable_2) к точке J2_4.</summary>
+    /// <summary>
+    /// Автоматически подключает кабель (LS10-B702S_cable_2) к точке на корпусе
+    /// локтя. Шланг крепится НЕ к центру J2_4, а к «выступу» — верхней задней
+    /// части корпуса (куда подходит петля кабеля): примерно (0.02, 0.22, 0)
+    /// в локальных осях J2_4.
+    /// </summary>
     private void EnsureCableFollow()
     {
         Transform cable = FindChild(new string[] { "LS10-B702S_cable_2", "cable_2" });
@@ -63,7 +70,10 @@ public class SCARAController : RobotController
         follow.baseAnchor = baseTransform != null ? baseTransform : transform;
         follow.followTarget = joint2; // LS10-B702S_J2_4
         follow.cable = cable;
-        Debug.Log("[SCARA] Кабель подключён к точке " + (joint2 != null ? joint2.name : "J2_4"));
+        // Выступ на корпусе локтя (верх), куда подходит петля кабеля.
+        follow.targetAttachLocal = new Vector3(0.02f, 0.22f, 0f);
+        Debug.Log("[SCARA] Кабель подключён к выступу корпуса J2_4 (смещение " +
+                  follow.targetAttachLocal + ")");
     }
 
     private void Update()
@@ -269,6 +279,15 @@ public class SCARAController : RobotController
         refDir2 = (p3 - p2).normalized;
         initialHeight = Vector3.Dot(joint3.position - basePos, verticalAxis);
         geometryCached = true;
+
+        // Миграция старых широких лимитов: z_5 не должна глубоко «нырять».
+        if (ZMin < -0.1f || ZMax > 0.25f)
+        {
+            Debug.Log("[SCARA] Ход Z ограничен: было [" + ZMin + ".." + ZMax +
+                      "], стало [-0.06..0.18] (z_5 не опускается глубоко)");
+            ZMin = -0.06f;
+            ZMax = 0.18f;
+        }
 
         Debug.Log("[SCARA] DH: a1=" + link1Len.ToString("0.000") + " a2=" +
                   link2Len.ToString("0.000") + ", вертикаль=" +

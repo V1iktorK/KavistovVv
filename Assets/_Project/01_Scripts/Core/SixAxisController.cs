@@ -27,14 +27,14 @@ public class SixAxisController : RobotController
     public string baseName = "LS10-B702S_base_1";
 
     [Header("DH joint axes")]
-    [Tooltip("Оси вращения суставов в ЛОКАЛЬНЫХ координатах каждого сустава. По умолчанию для модели Robot.fbx: Y,Z,Z,Z,Y,Y")]
+    [Tooltip("Оси вращения суставов в ЛОКАЛЬНЫХ координатах каждого сустава. Для Robot.fbx: J1 — вертикаль (yaw), J2/J3 — поперечные (плечо/локоть), J4 — ВДОЛЬ ПРЕДПЛЕЧЬЯ (roll запястья!), J5 — поперечная (pitch кисти), J6 — roll фланца. Если ось J4 всё ещё Z (forward) — на первом решении она автоматически пересчитается вдоль звена 3→4.")]
     public Vector3[] jointAxesLocal = new Vector3[]
     {
         Vector3.up,      // Axis1 — yaw базы
         Vector3.forward, // Axis2 — плечо (в плоскости руки)
         Vector3.forward, // Axis3 — локоть
-        Vector3.forward, // Axis4 — наклон запястья
-        Vector3.up,      // Axis5 — yaw запястья
+        new Vector3(-0.984f, 0.179f, 0f).normalized, // Axis4 — roll ЗАПЯСТЬЯ вдоль предплечья
+        Vector3.forward, // Axis5 — pitch кисти (⊥ предплечью)
         Vector3.up       // Axis6 — roll фланца (локальная Y оси = вдоль инструмента)
     };
     [Tooltip("Автоподбор осей по геометрии (cross-произведения звеньев) при первом решении. Для Robot.fbx не требуется.")]
@@ -266,6 +266,8 @@ public class SixAxisController : RobotController
 
         if (autoDetectAxesFromLinks && n >= 4)
             AutoDetectAxes();
+        else
+            AutoFixWristAxis();
 
         for (int i = 0; i < n; i++)
         {
@@ -282,6 +284,51 @@ public class SixAxisController : RobotController
 
         if (changed || !refsReported)
             LogAxesOnce(n);
+    }
+
+    /// <summary>
+    /// Миграция «битых» осей запястья (старая схема Y,Z,Z,Z,Y,Y, из-за которой
+    /// предплечье Axis4_2 «разворачивалось на 180°» и задевало корпус Axis3_2):
+    ///   J4 (индекс 3) был pitch (forward) → пересчитываем ВДОЛЬ ПРЕДПЛЕЧЬЯ
+    ///   (roll запястья): направление звена 3→4 в локальных осях сустава 4
+    ///   инвариантно к текущей позе;
+    ///   J5 (индекс 4) был yaw (up) → становится pitch (forward), ⊥ предплечью.
+    /// Ручные настройки не перезаписываются.
+    /// </summary>
+    private void AutoFixWristAxis()
+    {
+        if (jointTransforms == null || jointTransforms.Length < 5) return;
+        if (jointAxesLocal == null || jointAxesLocal.Length < 5) return;
+
+        // Миграция специфична для «сферического» запястья: J4 == J5 (одна точка).
+        Transform j4 = jointTransforms[3];
+        Transform j5 = jointTransforms[4];
+        if (j4 == null || j5 == null) return;
+        if ((j5.position - j4.position).sqrMagnitude > 0.0025f) return; // > 5 см — другая схема
+
+        // J4: ось roll запястья (вдоль предплечья).
+        if ((jointAxesLocal[3] - Vector3.forward).sqrMagnitude <= 0.01f)
+        {
+            Transform j3 = jointTransforms[2];
+            if (j3 != null)
+            {
+                Vector3 worldDir = j4.position - j3.position; // предплечье (Axis3→Axis4)
+                if (worldDir.sqrMagnitude > 1e-6f)
+                {
+                    worldDir.Normalize();
+                    jointAxesLocal[3] = j4.InverseTransformDirection(worldDir);
+                    Debug.Log("[SixAxis] J4: ось пересчитана вдоль предплечья: " +
+                              jointAxesLocal[3].ToString("0.000"));
+                }
+            }
+        }
+
+        // J5: pitch кисти — поперечная ось (forward), а не вертикаль (up).
+        if ((jointAxesLocal[4] - Vector3.up).sqrMagnitude <= 0.01f)
+        {
+            jointAxesLocal[4] = Vector3.forward;
+            Debug.Log("[SixAxis] J5: ось пересчитана на pitch (forward)");
+        }
     }
 
     private void ResizeAxisCache(int n)

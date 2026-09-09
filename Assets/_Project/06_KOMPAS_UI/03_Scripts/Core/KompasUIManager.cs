@@ -18,15 +18,31 @@ namespace KompasUI
     public class KompasUIManager : MonoBehaviour
     {
         [Header("Положение канваса перед пользователем")]
-        [Tooltip("Дистанция канваса от камеры, метры")]
-        public float canvasDistance = 1.6f;
-        [Tooltip("Физическая высота канваса, метры (1280x720 пропорция)")]
-        public float canvasHeight = 0.9f;
-        [Tooltip("Физическая ширина канваса, метры")]
-        public float canvasWidth = 1.6f;
+        [Tooltip("Дистанция канваса от камеры, метры (приближено к камере)")]
+        public float canvasDistance = 1.2f;
+        [Tooltip("Размер канваса подстраивается под экран (FOV камеры × формат 16:9 = 1920×1080)")]
+        public bool canvasFitToScreen = true;
+        [Tooltip("Эталонный формат экрана (ширина/высота). Сейчас 16:9")]
+        public float uiAspect = 16f / 9f;
+        [Tooltip("Опорное разрешение по горизонтали (для масштаба в пикселях канваса)")]
+        public float uiReferenceWidth = 1920f;
+        [Tooltip("Опорное разрешение по вертикали")]
+        public float uiReferenceHeight = 1080f;
 
         [Header("Опции")]
         public bool autoRebuildTree = true;
+
+        [Header("«Лампочка Ильича»")]
+        [Tooltip("Тёплая точечная лампа над столом (только источник света)")]
+        public bool enableWorkLamp = true;
+        [Tooltip("Высота лампы над столешницей, метры")]
+        public float lampHeight = 1.25f;
+        [Tooltip("Яркость (HDRP, кандела)")]
+        public float lampIntensity = 900f;
+        [Tooltip("Дальность света, метры")]
+        public float lampRange = 7f;
+        [Tooltip("Тёплая температура, K")]
+        public float lampTemperature = 2700f;
 
         private Canvas canvas;
         private RectTransform canvasRect;
@@ -43,6 +59,7 @@ namespace KompasUI
 
         private ProjectNode selectedNode;
         private RobotController lastActiveRobot;
+        private GameObject workLamp;
 
         private Camera MainCamera
         {
@@ -89,7 +106,83 @@ namespace KompasUI
             }
 
             if (spawner != null) spawner.RefreshRobotTemplates();
+            EnsureWorkLamp();
             SelectNode(RuntimeRegistry.Roots.Count > 0 ? RuntimeRegistry.Roots[0] : null);
+        }
+
+        /// <summary>
+        /// «Лампочка Ильича»: тёплый точечный источник над столом (без модельки).
+        /// Ставится над ПЕРВЫМ столом — уже существующим в сцене либо размещённым
+        /// через UI (на повторные вызовы не реагирует, пока лампа не создана).
+        /// </summary>
+        private void EnsureWorkLamp()
+        {
+            if (!enableWorkLamp || workLamp != null) return;
+
+            Transform table = FindFirstTableSurface();
+            if (table == null) return;
+
+            Bounds b = GetRenderBounds(table);
+            if (b.size.y < 0.001f) return;
+
+            Vector3 pos = new Vector3(b.center.x, b.max.y + lampHeight, b.center.z);
+            GameObject go = new GameObject("IlyichLamp");
+            go.transform.position = pos;
+
+            var light = go.AddComponent<Light>();
+            light.type = LightType.Point;
+            light.intensity = lampIntensity;
+            light.range = lampRange;
+            light.color = Color.white;
+            light.colorTemperature = lampTemperature; // 2700 K — тёплая «лампочка»
+            light.useColorTemperature = true;
+            light.shadows = LightShadows.Soft;
+
+            workLamp = go;
+            Debug.Log("[KompasUI] «Лампочка Ильича» над столом '" + table.name +
+                      "' (" + pos.ToString("0.00") + ")");
+        }
+
+        /// <summary>Первый «стол»: объект с именем стол/desk/table (не робот).</summary>
+        private static Transform FindFirstTableSurface()
+        {
+            Transform best = null;
+            float bestTop = float.NegativeInfinity;
+            foreach (Transform t in Object.FindObjectsByType<Transform>(FindObjectsInactive.Include))
+            {
+                if (t.GetComponent<Renderer>() == null) continue;
+                if (t.GetComponentInParent<RobotController>() != null) continue;
+                if (!NameLooksLikeTable(t.name)) continue;
+                Renderer r = t.GetComponent<Renderer>();
+                if (r == null) continue;
+                float top = r.bounds.max.y; // берём самый «верхний» кусок стола
+                if (top > bestTop)
+                {
+                    bestTop = top;
+                    best = t;
+                }
+            }
+            return best;
+        }
+
+        private static bool NameLooksLikeTable(string name)
+        {
+            string n = name.ToLowerInvariant();
+            return n.IndexOf("стол", System.StringComparison.Ordinal) >= 0 ||
+                   n.IndexOf("desk", System.StringComparison.Ordinal) >= 0 ||
+                   n.IndexOf("table", System.StringComparison.Ordinal) >= 0;
+        }
+
+        /// <summary>Объединённые границы мешей объекта (для столешницы).</summary>
+        private static Bounds GetRenderBounds(Transform root)
+        {
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0)
+                return new Bounds(root.position, Vector3.one);
+            Bounds b = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+                b.Encapsulate(renderers[i].bounds);
+            return b;
         }
 
         void OnDestroy()
@@ -118,25 +211,33 @@ namespace KompasUI
             canvas = canvasGo.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
 
+            // Канвас «в пикселях»: 1920×1080 (опорное разрешение), 16:9.
             canvasRect = (RectTransform)canvasGo.transform;
-            canvasRect.sizeDelta = new Vector2(1280f, 720f);
-            canvasRect.localScale = new Vector3(
-                canvasWidth / 1280f,
-                canvasHeight / 720f,
-                1f);
+            canvasRect.sizeDelta = new Vector2(uiReferenceWidth, uiReferenceHeight);
 
             // Канвас привязывается К КАМЕРЕ (родитель = камера): UI движется строго
-            // вместе с камерой без какого-либо лага/догоняния. Дочерний канвас
-            // наследует поворот камеры и всегда остаётся перед ней.
+            // вместе с камерой без какого-либо лага/догоняния.
             Camera cam = MainCamera;
             if (cam != null)
             {
                 canvasGo.transform.SetParent(cam.transform, true);
-                canvasRect.localPosition = new Vector3(0f, -0.12f, canvasDistance);
+                canvasRect.localPosition = new Vector3(0f, 0f, canvasDistance);
                 canvasRect.localRotation = Quaternion.identity;
+
+                // Масштаб зависит от РАЗРЕШЕНИЯ экрана: канвас занимает весь кадр
+                // камеры (высота = 2·d·tan(FOV/2), ширина = высота × 16/9).
+                float worldHeight = canvasFitToScreen && cam.orthographic == false
+                    ? 2f * canvasDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad)
+                    : 2f * canvasDistance * Mathf.Tan(30f * Mathf.Deg2Rad);
+                if (worldHeight < 0.01f) worldHeight = 1.2f;
+                float worldWidth = worldHeight * uiAspect;
+                float scaleX = worldWidth / uiReferenceWidth;
+                float scaleY = worldHeight / uiReferenceHeight;
+                canvasRect.localScale = new Vector3(scaleX, scaleY, 1f);
             }
             else
             {
+                canvasRect.localScale = Vector3.one;
                 PositionCanvasInFront();
             }
         }
@@ -146,7 +247,6 @@ namespace KompasUI
             Camera cam = MainCamera;
             if (cam == null) return;
             Vector3 pos = cam.transform.position + cam.transform.forward * canvasDistance;
-            pos.y = cam.transform.position.y - 0.25f; // чуть ниже взгляда
             canvasRect.position = pos;
             canvasRect.rotation = cam.transform.rotation;
         }
@@ -185,6 +285,8 @@ namespace KompasUI
 
         private void OnRegistryChanged()
         {
+            // Если стол появился/размещён — вешаем «лампочку Ильича» (один раз).
+            EnsureWorkLamp();
             RebuildTree();
         }
 
@@ -247,9 +349,7 @@ namespace KompasUI
             if (cam == null) return;
 
             // Fallback (камера появилась позже): копируем позицию/поворот каждый кадр.
-            Vector3 desiredPos = cam.transform.position
-                                  + cam.transform.forward * canvasDistance
-                                  + cam.transform.up * (-0.12f);
+            Vector3 desiredPos = cam.transform.position + cam.transform.forward * canvasDistance;
             canvasRect.position = desiredPos;
             canvasRect.rotation = cam.transform.rotation;
         }
