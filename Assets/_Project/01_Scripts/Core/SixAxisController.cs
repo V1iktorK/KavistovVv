@@ -39,6 +39,8 @@ public class SixAxisController : RobotController
     };
     [Tooltip("Автоподбор осей по геометрии (cross-произведения звеньев) при первом решении. Для Robot.fbx не требуется.")]
     public bool autoDetectAxesFromLinks = false;
+    [Tooltip("Компенсация «кривых» пивотов FBX: меш предплечья (Axis4_2) переносится с запястья (Axis4) на локоть (Axis3), чтобы балка не вращалась вместе с roll-запястьем (артефакты/расстыковка с Axis3_2)")]
+    public bool fixLegacyMeshParents = true;
 
     [Header("Smoothing")]
     [Range(0f, 0.99f)] public float positionSmoothing = 0.85f;
@@ -61,6 +63,7 @@ public class SixAxisController : RobotController
     private bool selfCollisionSetup;
     private bool jointLimitsInitialized;
     private bool refsReported;
+    private bool meshesFixed;
     private readonly Quaternion[] rollbackPose = new Quaternion[6];
 
     // Кэш DH-осей: q0 — «нулевая» поза сустава (при старте/первом решении),
@@ -75,6 +78,11 @@ public class SixAxisController : RobotController
     void Update()
     {
         ResolveRobotReferences();
+        if (!meshesFixed)
+        {
+            FixLegacyMeshParents();
+            meshesFixed = true;
+        }
         SetupSelfCollision();
         MoveToTarget(Time.deltaTime);
         ApplyJointLimits();
@@ -213,6 +221,52 @@ public class SixAxisController : RobotController
             t = t.parent;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Компенсация «кривых» начал координат в FBX (все меши экспортированы с пивотом
+    /// в одной точке модели): меш-звено, которое по геометрии лежит МЕЖДУ локтем
+    /// (Axis3) и запястьем (Axis4), висит на ЗАПЯСТЬЕ (Axis4) и при roll-повороте
+    /// запястья «разъезжается»/расстыковывается с корпусом локтя (Axis3_2).
+    /// Решение: переносим такой меш на локоть (Axis3) с сохранением мировой позы —
+    /// балка становится частью звена 3 и больше не вращается с запястьем.
+    /// Для нормальных моделей (правильные пивоты) — не требуется (флаг fixLegacyMeshParents).
+    /// </summary>
+    private void FixLegacyMeshParents()
+    {
+        if (!fixLegacyMeshParents) return;
+        if (jointTransforms == null || jointTransforms.Length < 4) return;
+
+        Transform elbow = jointTransforms[2];   // Axis3
+        Transform wrist = jointTransforms[3];   // Axis4
+        if (elbow == null || wrist == null) return;
+        if (!IsAncestorOf(elbow, wrist)) return;
+
+        // Прямые дети запястья, у которых есть меш и которые не являются кинематическими осями.
+        for (int i = wrist.childCount - 1; i >= 0; i--)
+        {
+            Transform child = wrist.GetChild(i);
+            if (child == null) continue;
+            if (child.name == jointTransforms[3].name) continue;
+            // Кинематическую ось (Axis5 и т.п.) не трогаем.
+            bool isKinematicAxis = false;
+            for (int k = 0; k < jointTransforms.Length; k++)
+            {
+                if (jointTransforms[k] == child) { isKinematicAxis = true; break; }
+            }
+            if (isKinematicAxis) continue;
+            if (child.GetComponent<Renderer>() == null &&
+                child.GetComponentInChildren<Renderer>(true) == null) continue;
+
+            // Сохраняем мировую позу и переносим под локоть.
+            Vector3 worldPos = child.position;
+            Quaternion worldRot = child.rotation;
+            child.SetParent(elbow, false);
+            child.position = worldPos;
+            child.rotation = worldRot;
+            Debug.Log("[SixAxis] Меш '" + child.name + "' перенесён с " + wrist.name +
+                      " на " + elbow.name + " (компенсация пивота FBX)");
+        }
     }
 
     private void InitializeJointLimits()

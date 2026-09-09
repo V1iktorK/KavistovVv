@@ -7,30 +7,29 @@ using UnityEngine.UI;
 namespace KompasUI
 {
     /// <summary>
-    /// Главный менеджер KOMPAS-интерфейса: строит единый World Space Canvas
-    /// перед пользователем и связывает все 5 зон:
-    ///  1) TopBar (сверху), 2) TreePanel (слева), 3) PropertiesPanel (справа,
-    ///     скрываемая тумблером), 4) CenterWindow (главная сцена, режим размещения),
-    ///  5) StatusBar (снизу, ссылки).
-    /// Управление: луч руки/мыши — клик по объекту открывает свойства.
+    /// Главный менеджер KOMPAS-интерфейса: единый OVERLAY-канвас (Screen Space —
+    /// как окно настольного приложения: всегда поверх сцены, не «режется»
+    /// геометрией, чёткий текст при любом разрешении) и 5 зон:
+    ///  1) TopBar (сверху), 2) TreePanel (слева), 3) PropertiesPanel (справа),
+    ///  4) CenterWindow (подсказки/выбор типа робота), 5) StatusBar (снизу).
+    /// Управление: TAB — показать/скрыть UI (курсор мыши тоже переключается).
     /// </summary>
     [DefaultExecutionOrder(-100)]
     public class KompasUIManager : MonoBehaviour
     {
-        [Header("Положение канваса перед пользователем")]
-        [Tooltip("Дистанция канваса от камеры, метры (приближено к камере)")]
-        public float canvasDistance = 1.2f;
-        [Tooltip("Размер канваса подстраивается под экран (FOV камеры × формат 16:9 = 1920×1080)")]
-        public bool canvasFitToScreen = true;
-        [Tooltip("Эталонный формат экрана (ширина/высота). Сейчас 16:9")]
-        public float uiAspect = 16f / 9f;
-        [Tooltip("Опорное разрешение по горизонтали (для масштаба в пикселях канваса)")]
+        /// <summary>Активный (не-дубликат) менеджер UI.</summary>
+        public static KompasUIManager Instance { get; private set; }
+
+        [Header("Разрешение UI (16:9, 1920×1080)")]
+        [Tooltip("Опорное разрешение канваса по горизонтали")]
         public float uiReferenceWidth = 1920f;
-        [Tooltip("Опорное разрешение по вертикали")]
+        [Tooltip("Опорное разрешение канваса по вертикали")]
         public float uiReferenceHeight = 1080f;
 
         [Header("Опции")]
         public bool autoRebuildTree = true;
+        [Tooltip("UI виден (TAB переключает вместе с курсором)")]
+        public bool uiVisible = true;
 
         [Header("«Лампочка Ильича»")]
         [Tooltip("Тёплая точечная лампа над столом (только источник света)")]
@@ -61,9 +60,26 @@ namespace KompasUI
         private RobotController lastActiveRobot;
         private GameObject workLamp;
 
+        // Размещение роботов.
+        private RobotController pendingRobotTemplate;   // выбранный тип (SCARA/6-осевой)
+        private Transform pendingTable;                 // стол, на который ставим
+
         private Camera MainCamera
         {
             get { return Camera.main != null ? Camera.main : Object.FindAnyObjectByType<Camera>(); }
+        }
+
+        /// <summary>Показать/скрыть весь KOMPAS-UI (TAB).</summary>
+        public static void SetUiVisible(bool visible)
+        {
+            if (Instance == null) return;
+            Instance.SetVisibleInternal(visible);
+        }
+
+        private void SetVisibleInternal(bool visible)
+        {
+            uiVisible = visible;
+            if (canvas != null) canvas.gameObject.SetActive(visible);
         }
 
         void Awake()
@@ -74,8 +90,15 @@ namespace KompasUI
                 return;
             }
 
+            Instance = this;
             EnsureEventSystem();
             spawner = gameObject.AddComponent<ObjectSpawner>();
+        }
+
+        void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+            RuntimeRegistry.Changed -= OnRegistryChanged;
         }
 
         private bool built;
@@ -185,10 +208,7 @@ namespace KompasUI
             return b;
         }
 
-        void OnDestroy()
-        {
-            RuntimeRegistry.Changed -= OnRegistryChanged;
-        }
+        // ------------------------------------------------------------------ UI построение
 
         private void EnsureEventSystem()
         {
@@ -201,54 +221,25 @@ namespace KompasUI
             }
         }
 
-        // ------------------------------------------------------------------ UI построение
-
         private void BuildCanvas()
         {
             GameObject canvasGo = new GameObject("KompasCanvas", typeof(Canvas), typeof(CanvasScaler),
                 typeof(GraphicRaycaster));
+            canvasGo.transform.SetParent(transform, false);
 
             canvas = canvasGo.GetComponent<Canvas>();
-            canvas.renderMode = RenderMode.WorldSpace;
+            // OVERLAY: UI всегда поверх сцены — не режется геометрией, чёткий текст,
+            // автоматически следует за разрешением экрана (TAB может скрыть).
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
 
-            // Канвас «в пикселях»: 1920×1080 (опорное разрешение), 16:9.
+            CanvasScaler scaler = canvasGo.GetComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(uiReferenceWidth, uiReferenceHeight);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f;
+
             canvasRect = (RectTransform)canvasGo.transform;
             canvasRect.sizeDelta = new Vector2(uiReferenceWidth, uiReferenceHeight);
-
-            // Канвас привязывается К КАМЕРЕ (родитель = камера): UI движется строго
-            // вместе с камерой без какого-либо лага/догоняния.
-            Camera cam = MainCamera;
-            if (cam != null)
-            {
-                canvasGo.transform.SetParent(cam.transform, true);
-                canvasRect.localPosition = new Vector3(0f, 0f, canvasDistance);
-                canvasRect.localRotation = Quaternion.identity;
-
-                // Масштаб зависит от РАЗРЕШЕНИЯ экрана: канвас занимает весь кадр
-                // камеры (высота = 2·d·tan(FOV/2), ширина = высота × 16/9).
-                float worldHeight = canvasFitToScreen && cam.orthographic == false
-                    ? 2f * canvasDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad)
-                    : 2f * canvasDistance * Mathf.Tan(30f * Mathf.Deg2Rad);
-                if (worldHeight < 0.01f) worldHeight = 1.2f;
-                float worldWidth = worldHeight * uiAspect;
-                float scaleX = worldWidth / uiReferenceWidth;
-                float scaleY = worldHeight / uiReferenceHeight;
-                canvasRect.localScale = new Vector3(scaleX, scaleY, 1f);
-            }
-            else
-            {
-                canvasRect.localScale = Vector3.one;
-                PositionCanvasInFront();
-            }
-        }
-
-        private void PositionCanvasInFront()
-        {
-            Camera cam = MainCamera;
-            if (cam == null) return;
-            Vector3 pos = cam.transform.position + cam.transform.forward * canvasDistance;
-            canvasRect.position = pos;
-            canvasRect.rotation = cam.transform.rotation;
         }
 
         // ------------------------------------------------------------------ Зоны
@@ -314,7 +305,50 @@ namespace KompasUI
         public void StartPlacement(SpawnKind kind)
         {
             BuildZonesIfNeeded();
+            if (kind == SpawnKind.Robot)
+            {
+                // Сначала выбор типа робота (SCARA или 6-осевой).
+                pendingRobotTemplate = null;
+                centerWindow.StartPlacement(SpawnKind.None); // убрать старое размещение
+                centerWindow.ShowRobotChooser(OnRobotTypeChosen);
+                return;
+            }
+            if (kind == SpawnKind.None)
+            {
+                pendingRobotTemplate = null;
+            }
             centerWindow.StartPlacement(kind);
+        }
+
+        /// <summary>Выбран тип робота (0 — 6-осевой, 1 — SCARA).</summary>
+        private void OnRobotTypeChosen(int typeIndex)
+        {
+            centerWindow.HideRobotChooser();
+
+            if (spawner == null) return;
+            spawner.RefreshRobotTemplates();
+            RobotController template = null;
+            foreach (RobotController rc in spawner.robotTemplates)
+            {
+                if (rc == null) continue;
+                bool isSix = rc is SixAxisController;
+                bool isScara = rc is SCARAController;
+                if ((typeIndex == 0 && isSix) || (typeIndex == 1 && isScara))
+                {
+                    template = rc;
+                    break;
+                }
+            }
+            if (template == null)
+            {
+                Debug.LogWarning("[KompasUI] Нет шаблона робота нужного типа (0=6-осевой, 1=SCARA).");
+                return;
+            }
+
+            pendingRobotTemplate = template;
+            Debug.Log("[KompasUI] Размещение робота: " + template.robotName +
+                      " (наведите на стол, ←/→ направление, ЛКМ/Enter — поставить)");
+            centerWindow.StartPlacement(SpawnKind.Robot);
         }
 
         /// <summary>Открыть/закрыть окно «Настройки» (кнопка TopBar).</summary>
@@ -330,28 +364,40 @@ namespace KompasUI
         {
             if (!built) return; // зоны ещё не построены (Start не отработал)
 
-            KeepCanvasFacingCamera();
+            HandleRobotChooserKeys();
             HandlePlacementInput();
             TrackActiveRobotForProperties();
         }
 
-        private void KeepCanvasFacingCamera()
+        /// <summary>Выбор типа робота клавишами 1/2, пока открыт выборщик; Esc — отмена.</summary>
+        private void HandleRobotChooserKeys()
         {
-            if (canvasRect == null) return;
+            if (centerWindow == null || !centerWindow.RobotChooserOpen) return;
 
-            // Канвас привязан к камере как дочерний объект — догонять/повторять
-            // позицию не нужно, он движется строго с камерой (без лага).
-            Transform parent = canvasRect.parent;
-            if (parent != null && parent.GetComponent<Camera>() != null)
+            bool escDown = (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+                           || (Keyboard.current == null && TryLegacyKeyDown(KeyCode.Escape));
+            if (escDown)
+            {
+                centerWindow.HideRobotChooser();
                 return;
+            }
 
-            Camera cam = MainCamera;
-            if (cam == null) return;
-
-            // Fallback (камера появилась позже): копируем позицию/поворот каждый кадр.
-            Vector3 desiredPos = cam.transform.position + cam.transform.forward * canvasDistance;
-            canvasRect.position = desiredPos;
-            canvasRect.rotation = cam.transform.rotation;
+            int pick = -1;
+            if (Keyboard.current != null)
+            {
+                if (Keyboard.current.digit1Key.wasPressedThisFrame) pick = 0;
+                else if (Keyboard.current.digit2Key.wasPressedThisFrame) pick = 1;
+            }
+            if (pick < 0)
+            {
+                try
+                {
+                    if (Input.GetKeyDown(KeyCode.Alpha1)) pick = 0;
+                    else if (Input.GetKeyDown(KeyCode.Alpha2)) pick = 1;
+                }
+                catch { }
+            }
+            if (pick >= 0) OnRobotTypeChosen(pick);
         }
 
         /// <summary>Следит за «активным» роботом: клик по нему открывает свойства справа.</summary>
@@ -429,17 +475,21 @@ namespace KompasUI
             bool hit = Physics.Raycast(ray, out RaycastHit hitInfo, 200f,
                 ~0, QueryTriggerInteraction.Ignore);
 
-            // Для робота цель — ЦЕНТР стола, если под прицелом стол.
-            Vector3 placePoint;
+            // Для робота цель — ЦЕНТР стола (робот ставится только на стол).
+            Vector3 placePoint = hit ? hitInfo.point : ray.origin + ray.direction * 10f;
             bool valid;
-            if (hit && centerWindow.ActiveKind == SpawnKind.Robot && TryFindTableCenter(hitInfo, out Vector3 tableCenter))
+            pendingTable = null;
+            if (centerWindow.ActiveKind == SpawnKind.Robot)
             {
-                placePoint = tableCenter;
-                valid = true;
+                Transform tableRoot = null;
+                bool onTable = false;
+                if (hit)
+                    onTable = TryFindTableSurface(hitInfo, out placePoint, out tableRoot);
+                valid = onTable;
+                if (onTable) pendingTable = tableRoot;
             }
             else
             {
-                placePoint = hit ? hitInfo.point : ray.origin + ray.direction * 10f;
                 valid = hit && hitInfo.normal.y > 0.3f;
             }
 
@@ -454,12 +504,15 @@ namespace KompasUI
         }
 
         /// <summary>
-        /// Ищет «стол» под точкой попадания: объект-стол (RegisteredObject/имя содержит стол)
-        /// либо плоская горизонтальная поверхность. Возвращает ЦЕНТР верхней плоскости стола.
+        /// Ищет «стол» под точкой попадания (RegisteredObject или имя стол/desk/table,
+        /// но не пол/level/plane). Возвращает ЦЕНТР ВЕРХА стола (по мешам корня)
+        /// и корень стола.
         /// </summary>
-        private static bool TryFindTableCenter(RaycastHit hit, out Vector3 center)
+        private static bool TryFindTableSurface(RaycastHit hit, out Vector3 center,
+            out Transform tableRoot)
         {
             center = hit.point;
+            tableRoot = null;
             Collider col = hit.collider;
             if (col == null) return false;
 
@@ -468,17 +521,58 @@ namespace KompasUI
             string name = col.transform.root.name.ToLowerInvariant();
 
             if (reg != null) looksLikeTable = true;
-            else if (name.Contains("стол") || name.Contains("table") || name.Contains("desk")) looksLikeTable = true;
+            else if (name.Contains("стол") || name.Contains("table") || name.Contains("desk"))
+                looksLikeTable = true;
 
-            // Не считаем столом пол/уровень (слишком большие плоскости).
-            if (name.Contains("plane") || name.Contains("floor") || name.Contains("level"))
+            // Не считаем столом пол/уровень/стены (слишком большие плоскости).
+            if (name.Contains("plane") || name.Contains("floor") || name.Contains("level") ||
+                name.Contains("hangar") || name.Contains("wall"))
                 looksLikeTable = false;
 
             if (!looksLikeTable) return false;
 
-            Bounds b = col.bounds;
+            Transform root = col.transform.root;
+            tableRoot = root;
+            Bounds b = GetRenderBounds(root);
+            if (b.size.y < 0.001f) return false;
             center = new Vector3(b.center.x, b.max.y, b.center.z);
             return true;
+        }
+
+        /// <summary>Удаляет размещённых через UI роботов, стоящих на этом столе.</summary>
+        private void RemoveRobotsOnTable(Transform tableRoot)
+        {
+            if (tableRoot == null) return;
+            Bounds b = GetRenderBounds(tableRoot);
+            float minX = b.min.x - 0.15f, maxX = b.max.x + 0.15f;
+            float minZ = b.min.z - 0.15f, maxZ = b.max.z + 0.15f;
+            float minY = b.min.y - 0.2f, maxY = b.max.y + 2.5f;
+
+            var robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+            foreach (RobotController rc in robots)
+            {
+                if (rc == null) continue;
+                if (rc.GetComponent<RegisteredObject>() == null) continue; // только копии UI
+                Vector3 p = rc.transform.position;
+                if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ &&
+                    p.y >= minY && p.y <= maxY)
+                {
+                    Debug.Log("[KompasUI] На столе '" + tableRoot.name +
+                              "' был робот '" + rc.robotName + "' — удалён (1 робот на стол).");
+                    Object.Destroy(rc.gameObject);
+                }
+            }
+        }
+
+        /// <summary>Делает робота единственным основным (подсветка/телеметрия).</summary>
+        private static void ActivateRobotOnly(RobotController keep)
+        {
+            if (keep == null) return;
+            var robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+            foreach (RobotController rc in robots)
+            {
+                if (rc != null) rc.SetActive(rc == keep);
+            }
         }
 
         private void ConfirmPlacement(Vector3 point)
@@ -489,22 +583,44 @@ namespace KompasUI
 
             if (spawner == null) return;
 
-            RegisteredObject spawned = kind == SpawnKind.Table
-                ? spawner.SpawnTable(point)
-                : spawner.SpawnRobot(point, yaw);
+            RobotController placedRobot = null;
+            RegisteredObject spawned;
+            if (kind == SpawnKind.Table)
+            {
+                spawned = spawner.SpawnTable(point);
+            }
+            else
+            {
+                // На стол ставится ОДИН робот: старых с этого стола убираем.
+                RemoveRobotsOnTable(pendingTable);
+                if (pendingRobotTemplate == null)
+                {
+                    Debug.LogWarning("[KompasUI] Не выбран тип робота — размещение отменено.");
+                    return;
+                }
+                spawned = spawner.SpawnRobot(point, yaw, pendingRobotTemplate);
+                if (spawned != null)
+                {
+                    placedRobot = spawned.GetComponent<RobotController>();
+                    ActivateRobotOnly(placedRobot); // новый робот становится основным
+                }
+            }
 
             if (spawned == null) return;
 
-            ProjectNode node = new ProjectNode(
-                System.Guid.NewGuid().ToString("N"),
-                spawned.DisplayName,
-                kind == SpawnKind.Table ? KompasNodeKind.Table : KompasNodeKind.Robot,
-                spawned.transform,
-                spawned.GetComponent<RobotController>());
-            spawned.Node = node;
-            RuntimeRegistry.Roots.Add(node);
+            // Реестр/дерево: пересобираем (удалённые старые роботы исчезают).
+            RuntimeRegistry.RebuildFromScene();
             RuntimeRegistry.NotifyChanged();
-            SelectNode(node);
+
+            if (placedRobot != null)
+            {
+                ProjectNode node = RuntimeRegistry.FindRobotNode(placedRobot);
+                if (node != null)
+                {
+                    if (treePanel != null) treePanel.Expand(node.Id);
+                    SelectNode(node);
+                }
+            }
         }
 
         private static bool TryLegacyKeyDown(KeyCode code)

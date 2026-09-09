@@ -55,10 +55,9 @@ public class SCARAController : RobotController
     }
 
     /// <summary>
-    /// Автоматически подключает кабель (LS10-B702S_cable_2) к точке на корпусе
-    /// локтя. Шланг крепится НЕ к центру J2_4, а к «выступу» — верхней задней
-    /// части корпуса (куда подходит петля кабеля): примерно (0.02, 0.22, 0)
-    /// в локальных осях J2_4.
+    /// Автоматически подключает кабель (LS10-B702S_cable_2). По фото реальных
+    /// SCARA: шланг входит в ОТВЕРСТИЕ НАД началом координат LS10-B702S_J2_4 —
+    /// точка крепления = (0, ~0.2, 0) в локальных осях J2_4 (крышка корпуса локтя).
     /// </summary>
     private void EnsureCableFollow()
     {
@@ -70,10 +69,10 @@ public class SCARAController : RobotController
         follow.baseAnchor = baseTransform != null ? baseTransform : transform;
         follow.followTarget = joint2; // LS10-B702S_J2_4
         follow.cable = cable;
-        // Выступ на корпусе локтя (верх), куда подходит петля кабеля.
-        follow.targetAttachLocal = new Vector3(0.02f, 0.22f, 0f);
-        Debug.Log("[SCARA] Кабель подключён к выступу корпуса J2_4 (смещение " +
-                  follow.targetAttachLocal + ")");
+        // Отверстие для шланга — НАД началом координат J2_4 (на крышке корпуса).
+        follow.targetAttachLocal = new Vector3(0f, 0.2f, 0f);
+        Debug.Log("[SCARA] Шланг закреплён в отверстии над осью J2_4: " +
+                  follow.targetAttachLocal);
     }
 
     private void Update()
@@ -225,9 +224,45 @@ public class SCARAController : RobotController
         return Quaternion.AngleAxis(radians * Mathf.Rad2Deg, axis) * v;
     }
 
-    private void ResolveJoints()
+    /// <summary>
+    /// Вычисляет максимальное опускание z_5 из геометрии: верх меша z_5 («пимпочка»)
+    /// не должен входить в корпус J2_4. Ограничение считается по вертикальной оси.
+    /// </summary>
+    private void ApplyZTravelFromGeometry()
     {
-        if (baseTransform == null)
+        if (joint3 == null || joint2 == null) return;
+
+        Renderer rod = joint3.GetComponentInChildren<Renderer>(true);
+        Renderer housing = joint2.GetComponent<Renderer>();
+        if (rod == null || housing == null)
+        {
+            // Резерв: старые широкие лимиты сжимаем (z_5 не должна глубоко «нырять»).
+            if (ZMin < -0.1f) ZMin = -0.06f;
+            if (ZMax > 0.25f) ZMax = 0.18f;
+            return;
+        }
+
+        Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : Vector3.up;
+        Vector3 basePos = baseTransform != null ? baseTransform.position : transform.position;
+
+        float rodTop = Vector3.Dot(rod.bounds.max - basePos, axis);
+        float roof = Vector3.Dot(housing.bounds.max - basePos, axis);
+        float clearance = rodTop - roof; // зазор «пимпочки» над крышкой в стартовой позе
+
+        if (clearance < 0.01f) return; // уже упирается — не трогаем
+        float maxDown = Mathf.Clamp(clearance - 0.006f, 0.02f, 0.25f);
+        float physicalMin = -maxDown;
+        if (Mathf.Abs(ZMin - physicalMin) > 0.002f)
+        {
+            Debug.Log("[SCARA] Ход Z вниз по геометрии: было " + ZMin +
+                      ", стало " + physicalMin.ToString("0.000") +
+                      " (пимпочка упирается в крышку J2_4)");
+            ZMin = physicalMin;
+        }
+    }
+
+    private void ResolveJoints()
+    {        if (baseTransform == null)
         {
             baseTransform = FindChild(new string[] { baseName });
         }
@@ -280,14 +315,10 @@ public class SCARAController : RobotController
         initialHeight = Vector3.Dot(joint3.position - basePos, verticalAxis);
         geometryCached = true;
 
-        // Миграция старых широких лимитов: z_5 не должна глубоко «нырять».
-        if (ZMin < -0.1f || ZMax > 0.25f)
-        {
-            Debug.Log("[SCARA] Ход Z ограничен: было [" + ZMin + ".." + ZMax +
-                      "], стало [-0.06..0.18] (z_5 не опускается глубоко)");
-            ZMin = -0.06f;
-            ZMax = 0.18f;
-        }
+        // Физический упор хода вниз: верхняя «пимпочка» z_5 (верх меша) должна
+        // упираться в крышку корпуса J2_4, а не входить в корпус. Максимальное
+        // опускание = зазор между верхом z_5 и верхом корпуса локтя (по вертикали).
+        ApplyZTravelFromGeometry();
 
         Debug.Log("[SCARA] DH: a1=" + link1Len.ToString("0.000") + " a2=" +
                   link2Len.ToString("0.000") + ", вертикаль=" +

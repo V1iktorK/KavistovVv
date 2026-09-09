@@ -35,18 +35,26 @@ namespace KompasUI
             return robotTemplates;
         }
 
-        /// <summary>Спавнит стол (примитив-куб) в точке.</summary>
-        public RegisteredObject SpawnTable(Vector3 position, Vector3? upNormal = null)
+        /// <summary>
+        /// Спавнит стол. point — точка ПОВЕРХНОСТИ (пол/стол): низ стола
+        /// «приклеивается» к ней (без утопленного по центру размещения).
+        /// </summary>
+        public RegisteredObject SpawnTable(Vector3 surfacePoint, Vector3? upNormal = null)
         {
             GameObject table = GameObject.CreatePrimitive(PrimitiveType.Cube);
             table.name = "Стол_" + System.DateTime.Now.ToString("HHmmss");
-            table.transform.position = position + Vector3.up * 0.01f;
-            table.transform.localScale = new Vector3(1.2f, 0.05f, 0.8f);
 
+            Vector3 scale = new Vector3(1.2f, 0.05f, 0.8f);
+            table.transform.localScale = scale;
+            Vector3 up = upNormal != null && upNormal.Value.sqrMagnitude > 0.01f
+                ? upNormal.Value.normalized
+                : Vector3.up;
             if (upNormal != null && upNormal.Value.sqrMagnitude > 0.01f)
             {
-                table.transform.up = upNormal.Value;
+                table.transform.up = up;
             }
+            // Центр куба поднимаем на половину высоты: низ стоит на поверхности.
+            table.transform.position = surfacePoint + up * (scale.y * 0.5f + 0.002f);
 
             RegisteredObject reg = table.AddComponent<RegisteredObject>();
             reg.DisplayName = table.name;
@@ -63,9 +71,17 @@ namespace KompasUI
                 Debug.LogWarning("[KompasUI] Нет робота-шаблона для копирования.");
                 return null;
             }
+            return SpawnRobot(position, yawDegrees, robotTemplates[0]);
+        }
 
-            GameObject copy = Object.Instantiate(robotTemplates[0].gameObject);
-            copy.name = robotTemplates[0].robotName + "_" + System.DateTime.Now.ToString("HHmmss");
+        /// <summary>Спавнит копию конкретного шаблона (SCARA/6-осевой).</summary>
+        public RegisteredObject SpawnRobot(Vector3 position, float yawDegrees,
+            RobotController template)
+        {
+            if (template == null) return null;
+
+            GameObject copy = Object.Instantiate(template.gameObject);
+            copy.name = template.robotName + "_" + System.DateTime.Now.ToString("HHmmss");
             copy.transform.position = position;
             copy.transform.rotation = Quaternion.Euler(0f, yawDegrees, 0f);
 

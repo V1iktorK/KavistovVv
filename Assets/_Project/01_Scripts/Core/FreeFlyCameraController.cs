@@ -71,10 +71,10 @@ public class FreeFlyCameraController : MonoBehaviour
     [Header("Flashlight (G)")]
     public bool enableFlashlight = true;
     public bool flashlightEnabled = false;
-    public float flashlightIntensity = 4500f;
-    public float flashlightRange = 18f;
-    public float flashlightAngle = 38f;
-    public float flashlightTemperature = 5200f;
+    public float flashlightIntensity = 11000f;
+    public float flashlightRange = 20f;
+    public float flashlightAngle = 150f;     // внешний конус
+    public float flashlightInnerAngle = 140f; // внутренний конус
 
     private float yaw;
     private float pitch;
@@ -298,7 +298,8 @@ public class FreeFlyCameraController : MonoBehaviour
         light.intensity = flashlightIntensity;
         light.range = flashlightRange;
         light.spotAngle = flashlightAngle;
-        light.colorTemperature = flashlightTemperature;
+        light.innerSpotAngle = flashlightInnerAngle;
+        light.colorTemperature = 5200f;
         light.useColorTemperature = true;
         light.shadows = LightShadows.Soft;
         light.enabled = false; // выключен до первого G
@@ -356,6 +357,10 @@ public class FreeFlyCameraController : MonoBehaviour
         yaw = transform.eulerAngles.y;
         pitch = transform.eulerAngles.x;
 
+        // KOMPAS-UI самосоздаётся: если в сцене нет менеджера (объект удалили) —
+        // создаём (канвас/панели строятся автоматически, дубликаты гасятся).
+        EnsureKompasUi();
+
         if (lockCursorOnStart && Application.isFocused)
         {
             Cursor.lockState = CursorLockMode.Locked;
@@ -366,6 +371,15 @@ public class FreeFlyCameraController : MonoBehaviour
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }
+    }
+
+    private void EnsureKompasUi()
+    {
+        if (KompasUI.KompasUIManager.Instance != null) return;
+        if (Object.FindFirstObjectByType<KompasUI.KompasUIManager>() != null) return;
+        var go = new GameObject("KOMPAS_UI");
+        go.AddComponent<KompasUI.KompasUIManager>();
+        Debug.Log("[FreeFlyCamera] KOMPAS-UI создан автоматически (менеджера в сцене не было).");
     }
 
     private void OnApplicationFocus(bool hasFocus)
@@ -392,23 +406,12 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         bool gamepadMode = IsGamepadActive();
 
-        // TAB — переключение ВИДИМОГО КУРСОРА (режим работы с UI/панелями).
-        // Захваченный курсор = телеоперация; свободный видимый курсор = UI.
-        // Клик по UI курсор не прячет; клик по миру — возврат к захвату.
+        // TAB — переключение РЕЖИМА UI: курсор виден + панели KOMPAS показаны
+        // (телеоперация: курсор захвачен + панели скрыты).
+        // Клик по UI курсор не прячет; клик по миру — возврат к телеоперации.
         if (IsKeyPressed(KeyCode.Tab))
         {
-            if (Cursor.lockState == CursorLockMode.Locked)
-            {
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.visible = true;
-                Debug.Log("[FreeFlyCamera] Курсор освобождён (режим UI). TAB/клик по миру — обратно в телеоперацию.");
-            }
-            else
-            {
-                Cursor.lockState = CursorLockMode.Locked;
-                Cursor.visible = false;
-                Debug.Log("[FreeFlyCamera] Курсор захвачен (телеоперация).");
-            }
+            ToggleUiMode();
         }
 
         // G — фонарик (toggle).
@@ -429,22 +432,23 @@ public class FreeFlyCameraController : MonoBehaviour
         if (IsKeyPressed(KeyCode.Z)) leftHandEnabled = !leftHandEnabled;
         if (IsKeyPressed(KeyCode.X)) rightHandEnabled = !rightHandEnabled;
 
-        // Выбор активного робота по клавише F (или кнопке смены устройства).
-        if (IsKeyPressed(KeyCode.F)) SelectNextRobot();
+        // Выбор робота по F (или LB на геймпаде): контекстный — см. SelectRobotContextual.
+        if (IsKeyPressed(KeyCode.F)) SelectRobotContextual();
         else if (gamepadMode && Gamepad.current != null && Gamepad.current.leftShoulder.wasPressedThisFrame)
-            SelectNextRobot();
+            SelectRobotContextual();
 
         bool lmbDown = IsMouseButtonDownThisFrame(0);
         bool rmbDown = IsMouseButtonDownThisFrame(1);
         bool overUI = IsPointerOverUI();
 
-        // Esc освобождает курсор (возврат в UI/меню).
+        // Esc освобождает курсор и показывает панели (как TAB в сторону UI).
         bool escDown = (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
                        || (Keyboard.current == null && TryLegacyKeyDown(KeyCode.Escape));
         if (escDown && Cursor.lockState == CursorLockMode.Locked)
         {
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
+            KompasUI.KompasUIManager.SetUiVisible(true);
         }
 
         // Клик по окну Game при свободном курсоре → захват мыши (FPS-режим).
@@ -454,6 +458,7 @@ public class FreeFlyCameraController : MonoBehaviour
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
+            KompasUI.KompasUIManager.SetUiVisible(false); // клик по миру = телеоперация
             justCaptured = true;
             primaryButtonWasPressed = true; // этот клик не считаем телеоперацией
         }
@@ -712,31 +717,122 @@ public class FreeFlyCameraController : MonoBehaviour
         return robot.transform.position;
     }
 
-    /// <summary>Циклически выбирает следующего робота в сцене (клавиша F).</summary>
-    private void SelectNextRobot()
+    /// <summary>
+    /// F: контекстный выбор робота.
+    ///   * робот ПОД ПРИЦЕЛОМ → он становится основным (и запоминается в истории);
+    ///   * робота под прицелом НЕТ и основной выбран → переключение на
+    ///     «последнего выбранного» (история, при повторе F — возврат);
+    ///   * ничего не выбрано → ближайший к прицелу / первый в сцене.
+    /// </summary>
+    private void SelectRobotContextual()
     {
         RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
         if (robots == null || robots.Length == 0) return;
 
-        // Ищем текущего «активного» (с подсветкой) как точку отсчёта.
-        int activeIdx = -1;
-        for (int i = 0; i < robots.Length; i++)
+        RobotController aimed = FindRobotUnderAim();
+        RobotController active = FindActiveRobot();
+
+        if (aimed != null)
         {
-            if (robots[i] != null && robots[i].isActive)
+            // Робот в прицеле — выбираем его; запоминаем предыдущего основного.
+            PushRobotHistory(active);
+            SelectRobotAsPrimary(aimed);
+            LogRobotSelected(aimed);
+            return;
+        }
+
+        if (active != null)
+        {
+            // В прицеле пусто: переключаемся на «последнего выбранного».
+            RobotController previous = PeekRobotHistory(active);
+            if (previous != null)
             {
-                activeIdx = i;
-                break;
+                PushRobotHistory(active);
+                SelectRobotAsPrimary(previous);
+                LogRobotSelected(previous);
+                return;
             }
+            // Истории ещё нет — циклический проход по списку (запасной вариант).
+            RobotController next = null;
+            for (int i = 0; i < robots.Length; i++)
+            {
+                if (robots[i] == active)
+                {
+                    for (int k = 1; k <= robots.Length; k++)
+                    {
+                        RobotController cand = robots[(i + k) % robots.Length];
+                        if (cand != null && cand != active) { next = cand; break; }
+                    }
+                    break;
+                }
+            }
+            if (next != null)
+            {
+                PushRobotHistory(active);
+                SelectRobotAsPrimary(next);
+                LogRobotSelected(next);
+            }
+            return;
         }
 
-        int next = (activeIdx + 1) % robots.Length;
-        for (int i = 0; i < robots.Length; i++)
+        // Активного нет: ближайший к прицелу или первый.
+        RobotController fallback = FindRobotNearRay(transform.position, transform.forward, laserLength);
+        if (fallback == null) fallback = robots[0];
+        PushRobotHistory(null);
+        SelectRobotAsPrimary(fallback);
+        LogRobotSelected(fallback);
+    }
+
+    /// <summary>История выбранных роботов: [0] — предыдущий основной (для F-переключения).</summary>
+    private readonly System.Collections.Generic.List<RobotController> robotHistory =
+        new System.Collections.Generic.List<RobotController>();
+
+    private void PushRobotHistory(RobotController robot)
+    {
+        if (robot == null) return;
+        robotHistory.Remove(robot);
+        robotHistory.Insert(0, robot);
+        while (robotHistory.Count > 4) robotHistory.RemoveAt(robotHistory.Count - 1);
+    }
+
+    /// <summary>Возвращает предыдущего основного робота (не equal текущему active).</summary>
+    private RobotController PeekRobotHistory(RobotController active)
+    {
+        if (robotHistory.Count == 0) return null;
+        for (int i = 0; i < robotHistory.Count; i++)
         {
-            if (robots[i] != null) robots[i].SetActive(i == next);
+            if (robotHistory[i] != null && robotHistory[i] != active) return robotHistory[i];
         }
+        return null;
+    }
 
-        if (robots[next] != null)
-            Debug.Log("[FreeFlyCamera] Активный робот: " + robots[next].robotName);
+    private static void LogRobotSelected(RobotController robot)
+    {
+        if (robot != null)
+            Debug.Log("[FreeFlyCamera] Основной робот: " + robot.robotName);
+    }
+
+    /// <summary>
+    /// TAB: режим UI (курсор виден + панели KOMPAS видны) ⟷ телеоперация
+    /// (курсор захвачен, панели скрыты). UI в Screen Space Overlay — виден
+    /// всегда и не «режется» геометрией сцены.
+    /// </summary>
+    private void ToggleUiMode()
+    {
+        bool uiMode = Cursor.lockState == CursorLockMode.Locked;
+        if (uiMode)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Debug.Log("[FreeFlyCamera] Режим UI: курсор + панели (TAB/клик по миру — обратно).");
+        }
+        else
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            Debug.Log("[FreeFlyCamera] Телеоперация: курсор захвачен, панели скрыты.");
+        }
+        KompasUI.KompasUIManager.SetUiVisible(uiMode);
     }
 
     private Transform FindAnyRobotTransformNearAim()

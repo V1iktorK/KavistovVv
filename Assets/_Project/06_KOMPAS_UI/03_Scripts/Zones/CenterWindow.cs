@@ -15,8 +15,13 @@ namespace KompasUI
         private GameObject preview;
         private Renderer previewRenderer;
         private SpawnKind activeKind = SpawnKind.None;
+        private RectTransform chooserRoot;
+        private System.Action<int> onRobotTypeChosen;
 
         public SpawnKind ActiveKind => activeKind;
+
+        // Выборщик типа робота открыт?
+        public bool RobotChooserOpen => chooserRoot != null && chooserRoot.gameObject.activeSelf;
 
         // Режим робота: угол поворота в горизонтали
         public float RobotYaw { get; private set; }
@@ -32,7 +37,69 @@ namespace KompasUI
             hr.anchorMax = new Vector2(0.5f, 1f);
             hr.pivot = new Vector2(0.5f, 1f);
             hr.anchoredPosition = new Vector2(0f, -52f);
-            hr.sizeDelta = new Vector2(640f, 24f);
+            hr.sizeDelta = new Vector2(900f, 24f);
+
+            BuildRobotChooser(parent);
+        }
+
+        /// <summary>Панель выбора типа робота (появляется по «Добавить робота»).</summary>
+        private void BuildRobotChooser(RectTransform parent)
+        {
+            Image panel = KompasTheme.CreatePanel(parent, "RobotChooser", KompasTheme.PanelHeader);
+            chooserRoot = panel.rectTransform;
+            chooserRoot.anchorMin = new Vector2(0.5f, 0.5f);
+            chooserRoot.anchorMax = new Vector2(0.5f, 0.5f);
+            chooserRoot.pivot = new Vector2(0.5f, 0.5f);
+            chooserRoot.sizeDelta = new Vector2(480f, 190f);
+            chooserRoot.anchoredPosition = new Vector2(0f, 0f);
+            chooserRoot.gameObject.SetActive(false);
+
+            Text title = KompasTheme.CreateText(chooserRoot, "Title",
+                "Выберите робота для размещения", KompasTheme.FontSize + 2,
+                TextAnchor.MiddleCenter, KompasTheme.TextMain);
+            title.rectTransform.anchorMin = new Vector2(0f, 1f);
+            title.rectTransform.anchorMax = new Vector2(1f, 1f);
+            title.rectTransform.pivot = new Vector2(0.5f, 1f);
+            title.rectTransform.offsetMin = new Vector2(0f, -40f);
+            title.rectTransform.offsetMax = new Vector2(0f, -8f);
+
+            Button six = KompasTheme.CreateButton(chooserRoot, "Btn_SixAxis", "6-осевой  (1)",
+                () => onRobotTypeChosen?.Invoke(0), 34);
+            RectTransform sr = (RectTransform)six.transform;
+            sr.anchorMin = new Vector2(0.5f, 1f);
+            sr.anchorMax = new Vector2(0.5f, 1f);
+            sr.pivot = new Vector2(0.5f, 1f);
+            sr.sizeDelta = new Vector2(220f, 34f);
+            sr.anchoredPosition = new Vector2(-118f, -56f);
+
+            Button scara = KompasTheme.CreateButton(chooserRoot, "Btn_Scara", "SCARA  (2)",
+                () => onRobotTypeChosen?.Invoke(1), 34);
+            RectTransform cr2 = (RectTransform)scara.transform;
+            cr2.anchorMin = new Vector2(0.5f, 1f);
+            cr2.anchorMax = new Vector2(0.5f, 1f);
+            cr2.pivot = new Vector2(0.5f, 1f);
+            cr2.sizeDelta = new Vector2(220f, 34f);
+            cr2.anchoredPosition = new Vector2(118f, -56f);
+
+            Text sub = KompasTheme.CreateText(chooserRoot, "Sub", "Esc — отмена",
+                KompasTheme.FontSizeSmall, TextAnchor.MiddleCenter, KompasTheme.TextDim);
+            sub.rectTransform.anchorMin = new Vector2(0f, 0f);
+            sub.rectTransform.anchorMax = new Vector2(1f, 0f);
+            sub.rectTransform.pivot = new Vector2(0.5f, 0f);
+            sub.rectTransform.offsetMin = new Vector2(0f, 10f);
+            sub.rectTransform.offsetMax = new Vector2(0f, 30f);
+        }
+
+        public void ShowRobotChooser(System.Action<int> onPick)
+        {
+            onRobotTypeChosen = onPick;
+            if (chooserRoot != null) chooserRoot.gameObject.SetActive(true);
+        }
+
+        public void HideRobotChooser()
+        {
+            onRobotTypeChosen = null;
+            if (chooserRoot != null) chooserRoot.gameObject.SetActive(false);
         }
 
         public void SetHint(string text)
@@ -43,17 +110,19 @@ namespace KompasUI
         public void StartPlacement(SpawnKind kind)
         {
             activeKind = kind;
-            RobotYaw = 0f;
             if (kind == SpawnKind.None)
             {
+                HideRobotChooser();
                 SetHint("");
                 DestroyPreview();
                 return;
             }
 
+            RobotYaw = 0f;
+            HideRobotChooser();
             SetHint(kind == SpawnKind.Table
-                ? "Стол: наведите на поверхность, ЛКМ/Enter — поставить. Esc — отмена."
-                : "Робот: ←/→ или A/D — направление (магнит к 90°), ЛКМ/Enter — поставить в центр стола. Esc — отмена.");
+                ? "Стол: наведите на пол/поверхность (низ стола приклеится), ЛКМ/Enter — поставить. Esc — отмена."
+                : "Робот: наведите на СТОЛ, ←/→ или A/D — направление (магнит к 90°), ЛКМ/Enter — поставить в центр стола. Esc — отмена.");
 
             CreatePreview(kind);
         }
@@ -80,7 +149,11 @@ namespace KompasUI
         public void UpdatePreview(Vector3 position, bool valid)
         {
             if (preview == null) return;
-            preview.transform.position = position;
+            // Стол «низом» к поверхности (центр приподнят на половину высоты).
+            Vector3 pos = position;
+            if (activeKind == SpawnKind.Table && preview.transform.localScale.y > 0.001f)
+                pos += Vector3.up * (preview.transform.localScale.y * 0.5f);
+            preview.transform.position = pos;
             // Направление робота — вращение вокруг вертикали
             Vector3 euler = preview.transform.eulerAngles;
             euler.y = RobotYaw;
