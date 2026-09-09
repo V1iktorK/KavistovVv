@@ -37,10 +37,10 @@ public class HDRPAutoLighting : MonoBehaviour
     public Vector3 fallbackCenter = new Vector3(12f, 0f, -8f);
 
     [Header("Глобальная яркость (Volume)")]
-    [Tooltip("Пост-экспозиция перед color grading, в EV. Почти ноль, чтобы не выбелить.")]
-    public float ambientBoost = 0.04f;
-    [Tooltip("Компенсация авто-экспозиции, в EV. Почти ноль.")]
-    public float cameraExposureCompensation = 0.08f;
+    [Tooltip("Пост-экспозиция перед color grading, в EV. Ноль — чтобы GUI не выбеливался.")]
+    public float ambientBoost = 0f;
+    [Tooltip("Компенсация авто-экспозиции, в EV. Ноль — нейтральный кадр без белого клиппинга.")]
+    public float cameraExposureCompensation = 0f;
     [Tooltip("Сила ambient occlusion (0 — полностью выключена, тёмные впадины уходят).")]
     public float ambientOcclusionStrength = 0.1f;
     public bool enableBloom = false;
@@ -55,22 +55,83 @@ public class HDRPAutoLighting : MonoBehaviour
     }
 
     /// <summary>Применяет студийный сет и настройки Volume. Идемпотентно.</summary>
+    /// <remarks>
+    /// Исправлен пересвет: направленные источники HDRP в люксах складываются,
+    /// поэтому держим один аккуратный ключ + лёгкий fill (без «выжигающего» rim,
+    /// и без +0.5 EV компенсации, которая выбеливала белую графику UI).
+    /// Функция идемпотентна: повторный вызов не накапливает свет.
+    /// </remarks>
     public void Apply()
     {
         Vector3 center = ResolveLightCenter();
-        if (enableKeyLight)
+
+        // Ключевой источник — единственный уверенный свет над роботом.
+        Light sun = SunLight();
+        float key = enableKeyLight ? SaturateLux(mainLightIntensity) : 0f;
+        if (sun != null)
         {
-            SetupStudioLight(KeyLightName, keyLightColor, mainLightIntensity,
-                center + new Vector3(lightDistance, lightHeight, lightDistance * 0.5f), center);
+            // Используем реальное «солнце» сцены; свой managed Key не создаём/отключаем,
+            // иначе два огромных направленных сложатся и снова пересветят.
+            sun.enabled = true;
+            sun.color = keyLightColor;
+            sun.intensity = key > 0f ? key : 0f;
+            ManageKeyLight(false);
         }
-        SetupStudioLight(FillLightName, fillColor, fillLightIntensity,
+        else if (enableKeyLight)
+        {
+            // Солнца нет — создаём мягкий ключ сами.
+            SetupStudioLight(KeyLightName, keyLightColor, key,
+                center + new Vector3(lightDistance, lightHeight, lightDistance * 0.5f), center);
+            ManageKeyLight(true);
+        }
+
+        // Fill — небольшой, чтобы смягчить тени, не пережимать форму.
+        SetupStudioLight(FillLightName, fillColor, SaturateFill(SaturateLux(fillLightIntensity)),
             center + new Vector3(-lightDistance, lightHeight * 0.8f, -lightDistance * 0.3f), center);
-        SetupStudioLight(RimLightName, Color.white, rimLightIntensity,
+
+        // Rim-контур: лёгкая окантовка; большой контровой свет «выжигает» блики UI/модели.
+        SetupStudioLight(RimLightName, Color.white, SaturateFill(SaturateLux(rimLightIntensity)),
             center + new Vector3(0f, lightHeight, -lightDistance * 1.2f), center);
 
         ConfigureGlobalVolume();
-        Debug.Log("[HDRPAutoLighting] Студийный свет применён. Ключевой: " + mainLightIntensity +
-                  " лк, заливающий: " + fillLightIntensity + " лк");
+        Debug.Log($"[HDRPAutoLighting] Свет применён: sun={key:0} лк, fill={SaturateLux(fillLightIntensity):0} лк, rim={SaturateLux(rimLightIntensity):0} лк");
+    }
+
+    /// <summary>Находит существующий направленный источник (солнце) либо единственный активный directional.</summary>
+    private Light SunLight()
+    {
+        // Приоритет — по имени (запечённый "Directional Light"), затем любой directional.
+        foreach (Light l in Object.FindObjectsByType<Light>(FindObjectsInactive.Include))
+        {
+            if (l.type == LightType.Directional && l.gameObject.name == "Directional Light")
+                return l;
+        }
+        foreach (Light l in Object.FindObjectsByType<Light>(FindObjectsInactive.Include))
+        {
+            if (l.type == LightType.Directional && !IsManaged(l))
+                return l;
+        }
+        return null;
+    }
+
+    /// <summary>True, если источник создан самим этим скриптом (Key/Fill/Rim) — таких не используем как «солнце».</summary>
+    private static bool IsManaged(Light l)
+    {
+        string n = l.gameObject.name;
+        return n == KeyLightName || n == FillLightName || n == RimLightName;
+    }
+
+    /// <summary>Ограничивает интенсивность разумным для HDRP физический диапазоном (не даём 80k+ удивлять).</summary>
+    private static float SaturateLux(float lux)
+    {
+        // Directional Lux в HDRP: солнце ~100k. Для ключа больше ~40k уже пережар.
+        return Mathf.Clamp(lux, 0f, 40000f);
+    }
+
+    /// <summary>Fill/Rim — акценты; не даём им подниматься до ключа (иначе клиппинг белого).</summary>
+    private static float SaturateFill(float lux)
+    {
+        return Mathf.Clamp(lux, 0f, 9000f);
     }
 
     /// <summary>Центр зоны освещения: по заданным целям, иначе по роботам сцены, иначе fallback.</summary>
@@ -136,6 +197,16 @@ public class HDRPAutoLighting : MonoBehaviour
 
         go.transform.position = position;
         go.transform.LookAt(lookAt + Vector3.up * 1f);
+    }
+
+    /// <summary>Включает/выключает managed Key-источник, чтобы не дублировать солнце.</summary>
+    private void ManageKeyLight(bool on)
+    {
+        GameObject go = GameObject.Find(KeyLightName);
+        if (go != null && go.TryGetComponent<Light>(out Light l))
+        {
+            l.enabled = on;
+        }
     }
 
     /// <summary>Настраивает глобальный Volume: экспозиция, пост-экспозиция, AO, Bloom.</summary>
