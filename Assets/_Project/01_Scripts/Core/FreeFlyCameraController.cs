@@ -16,8 +16,11 @@ using UnityEngine.InputSystem;
 ///        Правая (зелёная) — наведение ориентации TCP (куда «смотрит» инструмент).
 ///  3) Маленький коллайдер (CharacterController) на камере: камера врезается
 ///     в стены/текстуры, но не проходит сквозь них.
-///  4) Движение/поворот геймпадом, когда активен Gamepad-провайдер (F3),
-///     переключаемое клавишей G (или правым стиком при активном геймпаде).
+///  4) G — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
+///     свободен (можно нажимать кнопки панелей), повторное G/клик по миру —
+///     захват мыши и телеоперация.
+///  5) Управление геймпадом (стики) активно, когда геймпад подключён и курсор
+///     захвачен (телеоперация). Кнопка G для геймпада больше не используется.
 /// </summary>
 [RequireComponent(typeof(Camera))]
 public class FreeFlyCameraController : MonoBehaviour
@@ -341,14 +344,25 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         bool gamepadMode = IsGamepadActive();
 
-        // Переключаемое управление геймпадом: клавиша G (на клавиатуре),
-        // либо при активном геймпаде — правый стик нажатый (R3). При включении
-        // управления камера начинает слушать стики геймпада.
+        // G — переключение ВИДИМОГО КУРСОРА (режим работы с UI/панелями).
+        // Захваченный курсор = телеоперация; свободный видимый курсор = UI.
         if (IsKeyPressed(KeyCode.G))
         {
-            gamepadMove = !gamepadMove;
-            Debug.Log("[FreeFlyCamera] Управление геймпадом: " + (gamepadMove ? "ВКЛ" : "ВЫКЛ"));
+            if (Cursor.lockState == CursorLockMode.Locked)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                Debug.Log("[FreeFlyCamera] Курсор освобождён (режим UI). G/клик по миру — обратно в телеоперацию.");
+            }
+            else
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+                Debug.Log("[FreeFlyCamera] Курсор захвачен (телеоперация).");
+            }
         }
+        // Геймпад: стики активны только в телеоперации (курсор захвачен).
+        // R3 (нажатие правого стика) по-прежнему включает/выключает геймпад-управление.
         if (gamepadMode && Gamepad.current != null && Gamepad.current.rightStickButton.wasPressedThisFrame)
         {
             gamepadMove = !gamepadMove;
@@ -403,8 +417,9 @@ public class FreeFlyCameraController : MonoBehaviour
             transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
         }
 
-        // Поворот геймпадом (правый стик), переключаемо.
-        if (gamepadMove && gamepadMode && Gamepad.current != null)
+        // Поворот геймпадом (правый стик): только в телеоперации (курсор захвачен).
+        bool teleopMode = Cursor.lockState == CursorLockMode.Locked;
+        if (teleopMode && gamepadMove && gamepadMode && Gamepad.current != null)
         {
             Vector2 rot = Gamepad.current.rightStick.ReadValue();
             float lookX = rot.x * gamepadLookSensitivity * 100f * Time.deltaTime;
@@ -428,8 +443,8 @@ public class FreeFlyCameraController : MonoBehaviour
         if (IsKeyPressed(KeyCode.E)) move += Vector3.up * verticalSpeed;
         if (IsKeyPressed(KeyCode.Q)) move -= Vector3.up * verticalSpeed;
 
-        // Геймпад: левый стик — горизонтальное движение (переключаемо).
-        if (gamepadMove && gamepadMode && Gamepad.current != null)
+        // Геймпад: левый стик — горизонтальное движение (только телеоперация).
+        if (teleopMode && gamepadMove && gamepadMode && Gamepad.current != null)
         {
             Vector2 stick = Gamepad.current.leftStick.ReadValue();
             Vector3 planar = transform.forward * stick.y + transform.right * stick.x;
@@ -552,7 +567,15 @@ public class FreeFlyCameraController : MonoBehaviour
         // Клик по кнопке UI — не телеоперация.
         if (IsPointerOverUI()) return;
 
-        // 1) Сначала — активный (выбранный F / деревом) робот.
+        // 0) Клик ПО РОБОТУ (прицел над его моделью/коллайдером) — просто выбираем его основным.
+        RobotController hitRobot = FindRobotUnderAim();
+        if (hitRobot != null)
+        {
+            SelectRobotAsPrimary(hitRobot);
+            return;
+        }
+
+        // 1) Иначе — активный (выбранный F / деревом) робот.
         RobotController selectedRobot = FindActiveRobot();
 
         // 2) Затем — робот, на которого смотрит прицел.
@@ -574,7 +597,7 @@ public class FreeFlyCameraController : MonoBehaviour
 
         if (selectedRobot == null) return;
 
-        selectedRobot.SetActive(true);
+        SelectRobotAsPrimary(selectedRobot);
 
         Vector3 posTarget = aimHitSurface
             ? aimPoint
@@ -582,6 +605,33 @@ public class FreeFlyCameraController : MonoBehaviour
 
         selectedRobot.SetTarget(posTarget);
         Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} assigned to {selectedRobot.name}.");
+    }
+
+    /// <summary>Делает робота основным (единственным активным).</summary>
+    private static void SelectRobotAsPrimary(RobotController robot)
+    {
+        if (robot == null) return;
+        RobotController[] all = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+        foreach (RobotController rc in all)
+        {
+            if (rc != null) rc.SetActive(rc == robot);
+        }
+    }
+
+    /// <summary>Робот, чья модель/коллайдер находится под прицелом (по попаданию луча).</summary>
+    private RobotController FindRobotUnderAim()
+    {
+        Camera cam = GetComponent<Camera>();
+        if (cam == null) return null;
+
+        Ray ray = new Ray(transform.position + transform.up * 0.1f, transform.forward);
+        if (Physics.Raycast(ray, out RaycastHit hit, laserLength,
+                laserLayers, QueryTriggerInteraction.Ignore))
+        {
+            RobotController rc = FindPreferredRobotController(hit.collider.transform);
+            if (rc != null) return rc;
+        }
+        return null;
     }
 
     private static RobotController FindActiveRobot()

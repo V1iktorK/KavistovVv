@@ -14,7 +14,8 @@ namespace KompasUI
 
         private Action<SpawnKind> onPlacementRequested;
 
-        public void Build(RectTransform parent, Action<SpawnKind> placementRequested)
+        public void Build(RectTransform parent, Action<SpawnKind> placementRequested,
+            Action settingsRequested = null)
         {
             onPlacementRequested = placementRequested;
 
@@ -58,6 +59,11 @@ namespace KompasUI
 
             Button addRobot = AddToolButton("Добавить робота", accent: true);
             addRobot.onClick.AddListener(() => onPlacementRequested?.Invoke(SpawnKind.Robot));
+
+            AddSeparator();
+
+            Button settings = AddToolButton("Настройки");
+            settings.onClick.AddListener(() => settingsRequested?.Invoke());
         }
 
         private void AddSeparator()

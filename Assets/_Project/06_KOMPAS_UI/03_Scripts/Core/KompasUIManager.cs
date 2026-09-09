@@ -36,6 +36,7 @@ namespace KompasUI
         private PropertiesPanel propertiesPanel;
         private CenterWindow centerWindow;
         private StatusBar statusBar;
+        private SettingsWindow settingsWindow;
 
         private ObjectSpawner spawner;
         private IdleCameraBrain idleBrain;
@@ -113,7 +114,6 @@ namespace KompasUI
         {
             GameObject canvasGo = new GameObject("KompasCanvas", typeof(Canvas), typeof(CanvasScaler),
                 typeof(GraphicRaycaster));
-            canvasGo.transform.SetParent(transform, false);
 
             canvas = canvasGo.GetComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
@@ -125,7 +125,20 @@ namespace KompasUI
                 canvasHeight / 720f,
                 1f);
 
-            PositionCanvasInFront();
+            // Канвас привязывается К КАМЕРЕ (родитель = камера): UI движется строго
+            // вместе с камерой без какого-либо лага/догоняния. Дочерний канвас
+            // наследует поворот камеры и всегда остаётся перед ней.
+            Camera cam = MainCamera;
+            if (cam != null)
+            {
+                canvasGo.transform.SetParent(cam.transform, true);
+                canvasRect.localPosition = new Vector3(0f, -0.12f, canvasDistance);
+                canvasRect.localRotation = Quaternion.identity;
+            }
+            else
+            {
+                PositionCanvasInFront();
+            }
         }
 
         private void PositionCanvasInFront()
@@ -149,7 +162,10 @@ namespace KompasUI
             // Каждая зона сама себя позиционирует через anchors.
 
             topBar = gameObject.AddComponent<TopBar>();
-            topBar.Build(canvasRect, StartPlacement);
+            topBar.Build(canvasRect, StartPlacement, ToggleSettings);
+
+            settingsWindow = gameObject.AddComponent<SettingsWindow>();
+            settingsWindow.Build(canvasRect);
 
             treePanel = gameObject.AddComponent<TreePanel>();
             treePanel.Build(canvasRect, SelectNode);
@@ -199,6 +215,13 @@ namespace KompasUI
             centerWindow.StartPlacement(kind);
         }
 
+        /// <summary>Открыть/закрыть окно «Настройки» (кнопка TopBar).</summary>
+        public void ToggleSettings()
+        {
+            BuildZonesIfNeeded();
+            if (settingsWindow != null) settingsWindow.Toggle();
+        }
+
         // ------------------------------------------------------------------ Ввод / луч
 
         void Update()
@@ -212,11 +235,18 @@ namespace KompasUI
 
         private void KeepCanvasFacingCamera()
         {
-            Camera cam = MainCamera;
-            if (cam == null || canvasRect == null) return;
+            if (canvasRect == null) return;
 
-            // Канвас ВСЕГДА перед камерой: повторяет её позицию/поворот с фиксированным
-            // смещением (чуть ниже взгляда, чтобы не перекрывать обзор роботов).
+            // Канвас привязан к камере как дочерний объект — догонять/повторять
+            // позицию не нужно, он движется строго с камерой (без лага).
+            Transform parent = canvasRect.parent;
+            if (parent != null && parent.GetComponent<Camera>() != null)
+                return;
+
+            Camera cam = MainCamera;
+            if (cam == null) return;
+
+            // Fallback (камера появилась позже): копируем позицию/поворот каждый кадр.
             Vector3 desiredPos = cam.transform.position
                                   + cam.transform.forward * canvasDistance
                                   + cam.transform.up * (-0.12f);

@@ -1,23 +1,50 @@
+using KompasKinematics;
 using UnityEngine;
 
 /// <summary>
-/// Контроллер 6-осного манипулятора на базе инверсной кинематики (InverseKinematics).
-/// Реализует CCD-IK для позиции, выравнивание ориентации TCP, плавность движения,
-/// ограничения суставов и систему самостолкновений.
+/// Контроллер 6-осного манипулятора на базе честной кинематики
+/// по Денавиту–Хартенбергу (DH):
+///   * Прямая задача — иерархия трансформов (Unity-цепочка) + DHForward (RobotDH);
+///   * Обратная задача — ОСЕВОЙ CCD (RobotDH.DHInverse): каждый сустав
+///     поворачивается строго вокруг СВОЕЙ оси вращения (jointAxesLocal),
+///     без «свободных» вращений из старой версии (InverseKinematics больше не решает);
+///   * Ограничители и отчёт углов — тоже вдоль осей, как у реального контроллера.
+///
+/// Оси по умолчанию для модели Robot.fbx (замерено диагностикой по геометрии):
+///   J1 (Axis1) — вертикаль (yaw базы);        J2..J4 — поперечные оси (плоскость руки),
+///   J5 (Axis5) — yaw запястья;                J6 (Axis6) — roll фланца (вдоль инструмента,
+///   локальная ось Y Axis6 повёрнута моделью на 89° и указывает вдоль -X).
+/// Если поставить другой робот — оси правятся в инспекторе (или включите
+/// AutoDetectAxesFromLinks для автоподбора по перекрёстным произведениям звеньев).
 /// </summary>
 public class SixAxisController : RobotController
 {
-    [Header("6-Axis IK")]
+    [Header("6-Axis IK (DH, axis CCD)")]
+    [Tooltip("Ссылка на legacy-компонент InverseKinematics (не используется для расчёта, оставлена для совместимости).")]
     public InverseKinematics ik;
     public Transform[] jointTransforms;
     public Transform baseTransform;
     public string baseName = "LS10-B702S_base_1";
 
+    [Header("DH joint axes")]
+    [Tooltip("Оси вращения суставов в ЛОКАЛЬНЫХ координатах каждого сустава. По умолчанию для модели Robot.fbx: Y,Z,Z,Z,Y,Y")]
+    public Vector3[] jointAxesLocal = new Vector3[]
+    {
+        Vector3.up,      // Axis1 — yaw базы
+        Vector3.forward, // Axis2 — плечо (в плоскости руки)
+        Vector3.forward, // Axis3 — локоть
+        Vector3.forward, // Axis4 — наклон запястья
+        Vector3.up,      // Axis5 — yaw запястья
+        Vector3.up       // Axis6 — roll фланца (локальная Y оси = вдоль инструмента)
+    };
+    [Tooltip("Автоподбор осей по геометрии (cross-произведения звеньев) при первом решении. Для Robot.fbx не требуется.")]
+    public bool autoDetectAxesFromLinks = false;
+
     [Header("Smoothing")]
     [Range(0f, 0.99f)] public float positionSmoothing = 0.85f;
     [Range(0f, 0.99f)] public float rotationSmoothing = 0.9f;
 
-    [Header("Joint Limits")]
+    [Header("Joint Limits (degrees, along joint axes)")]
     public Vector2[] jointLimits = new Vector2[6];
 
     [Header("Self-collision guard")]
@@ -28,13 +55,20 @@ public class SixAxisController : RobotController
     [Tooltip("При коллизии откатывать только конфликтующие суставы (иначе стоп всего движения)")]
     public bool selectiveRollback = true;
 
+    // Плавная цель (движется к заданной со скоростью сглаживания).
     private Vector3 smoothedTargetPosition;
-    private Quaternion smoothedTargetRotation;
     private bool smoothingInitialized;
-    private bool hasRotationTarget;
     private bool selfCollisionSetup;
     private bool jointLimitsInitialized;
+    private bool refsReported;
     private readonly Quaternion[] rollbackPose = new Quaternion[6];
+
+    // Кэш DH-осей: q0 — «нулевая» поза сустава (при старте/первом решении),
+    // u = q0*axisLocal — ось измерения/возврата в локальных координатах.
+    private Quaternion[] jointBaseRot = new Quaternion[6];
+    private Vector3[] jointAxisUnit = new Vector3[6];
+    private Vector3[] jointRefLocal = new Vector3[6];
+    private int cachedJointCount = -1;
 
     public bool SelfCollisionBlocked { get; private set; }
 
@@ -67,9 +101,6 @@ public class SixAxisController : RobotController
 
     private void ResolveRobotReferences()
     {
-        if (ik == null)
-            ik = GetComponent<InverseKinematics>();
-
         Transform root = transform;
 
         // --- endEffector ---
@@ -119,17 +150,6 @@ public class SixAxisController : RobotController
             };
         }
         NormalizeJointTransforms();
-
-        if (ik != null)
-        {
-            ik.baseTransform = baseTransform;
-            ik.endEffector = endEffector;
-            if (ik.joints == null || ik.joints.Length == 0)
-                ik.joints = jointTransforms;
-            ik.positionThreshold = ikTolerance;
-            ik.orientationThreshold = 1f;
-            ik.maxIterations = ikIterations;
-        }
 
         if (!jointLimitsInitialized)
         {
@@ -218,73 +238,243 @@ public class SixAxisController : RobotController
         jointLimits[5] = new Vector2(-180f, 180f);
     }
 
+    // ------------------------------------------------------------------
+    //  DH-кэш осей
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Готовит кэш осей по текущей позе суставов (эта поза становится «нулевой»:
+    /// все измеренные углы считаются от неё). Семейство поз сустава:
+    /// localRotation = AngleAxis(θ, u) * q0, где q0 — поза на момент кэша,
+    /// u = q0*axisLocal — ось вращения в локальных координатах сустава.
+    /// </summary>
+    private void EnsureAxisCache()
+    {
+        int n = jointTransforms != null ? jointTransforms.Length : 0;
+        if (cachedJointCount == n && n > 0)
+            return;
+
+        bool changed = cachedJointCount != n;
+        if (n == 0)
+        {
+            cachedJointCount = n;
+            return;
+        }
+
+        ResizeAxisCache(n);
+        cachedJointCount = n;
+
+        if (autoDetectAxesFromLinks && n >= 4)
+            AutoDetectAxes();
+
+        for (int i = 0; i < n; i++)
+        {
+            Transform j = jointTransforms[i];
+            Quaternion q0 = j != null ? j.localRotation : Quaternion.identity;
+            Vector3 e = i < jointAxesLocal.Length && jointAxesLocal[i].sqrMagnitude > 0.01f
+                ? jointAxesLocal[i].normalized
+                : Vector3.up;
+            jointBaseRot[i] = q0;
+            jointAxisUnit[i] = e;
+            Vector3 u = (q0 * e).normalized; // ось в локальных координатах (неподвижна при вращении сустава)
+            jointRefLocal[i] = PickPerpendicular(u);
+        }
+
+        if (changed || !refsReported)
+            LogAxesOnce(n);
+    }
+
+    private void ResizeAxisCache(int n)
+    {
+        if (jointBaseRot.Length != n) jointBaseRot = new Quaternion[n];
+        if (jointAxisUnit.Length != n) jointAxisUnit = new Vector3[n];
+        if (jointRefLocal.Length != n) jointRefLocal = new Vector3[n];
+    }
+
+    /// <summary>
+    /// Автоподбор осей по геометрии: J1 — вертикаль; для остальных — нормаль
+    /// к плоскости соседних звеньев (cross-произведение), концевые суставы —
+    /// вдоль инструмента. Полезно для незнакомых моделей.
+    /// </summary>
+    private void AutoDetectAxes()
+    {
+        int n = jointTransforms.Length;
+        var links = new Vector3[n];
+        for (int i = 0; i < n; i++)
+        {
+            Vector3 p = jointTransforms[i] != null ? jointTransforms[i].position : Vector3.zero;
+            Vector3 prev = i > 0 && jointTransforms[i - 1] != null
+                ? jointTransforms[i - 1].position
+                : p;
+            links[i] = p - prev;
+        }
+
+        for (int i = 0; i < n && i < jointAxesLocal.Length; i++)
+        {
+            Vector3 axis;
+            if (i == 0)
+            {
+                // База: вращение вокруг вертикали (локальная ось Y базы/корпуса).
+                axis = Vector3.up;
+            }
+            else
+            {
+                Vector3 prevLink = links[i - 1];
+                Vector3 curLink = links[i];
+                if (curLink.sqrMagnitude < 1e-8f && i < n - 1) curLink = links[i + 1];
+                if (prevLink.sqrMagnitude > 1e-8f && curLink.sqrMagnitude > 1e-8f)
+                {
+                    // Нормаль к плоскости двух соседних звеньев (в локальных осях сустава).
+                    Vector3 worldAxis = Vector3.Cross(prevLink, curLink).normalized;
+                    Transform j = jointTransforms[i];
+                    if (worldAxis.sqrMagnitude < 0.5f && j != null)
+                        worldAxis = Vector3.Cross(prevLink, j.TransformDirection(Vector3.forward)).normalized;
+                    axis = j != null
+                        ? j.InverseTransformDirection(worldAxis)
+                        : worldAxis;
+                }
+                else
+                {
+                    axis = Vector3.up;
+                }
+            }
+
+            if (axis.sqrMagnitude < 0.5f)
+                axis = Vector3.up;
+            jointAxesLocal[i] = axis.normalized;
+        }
+    }
+
+    private static Vector3 PickPerpendicular(Vector3 u)
+    {
+        Vector3 seed = Mathf.Abs(u.y) < 0.9f ? Vector3.up : Vector3.right;
+        Vector3 r = Vector3.Cross(seed, u).normalized;
+        if (r.sqrMagnitude < 0.01f)
+            r = Vector3.Cross(Vector3.right, u).normalized;
+        return r;
+    }
+
+    private void LogAxesOnce(int n)
+    {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.Append("[SixAxis] DH-оси (на старте, в локальных осях суставов): ");
+        for (int i = 0; i < n; i++)
+        {
+            Transform j = jointTransforms[i];
+            if (i > 0) sb.Append(", ");
+            sb.Append((j != null ? j.name : "J" + (i + 1)) + "=" +
+                      jointAxisUnit[i].ToString("0.00").Replace("(", "").Replace(")", ""));
+        }
+        Debug.Log(sb.ToString());
+        refsReported = true;
+    }
+
+    /// <summary>Текущий угол сустава i вокруг СВОЕЙ оси (от «нулевой» позы, градусы).</summary>
+    private float MeasureJointAngle(int i)
+    {
+        Transform j = jointTransforms != null && i < jointTransforms.Length ? jointTransforms[i] : null;
+        if (j == null) return 0f;
+        EnsureAxisCache();
+        if (i >= jointBaseRot.Length) return 0f;
+
+        Quaternion q0 = jointBaseRot[i];
+        Vector3 u = (q0 * jointAxisUnit[i]).normalized;
+        Vector3 r = jointRefLocal[i];
+        Quaternion rel = j.localRotation * Quaternion.Inverse(q0);
+        Vector3 relR = rel * r;
+        Vector3 a = Vector3.ProjectOnPlane(r, u);
+        Vector3 b = Vector3.ProjectOnPlane(relR, u);
+        if (a.sqrMagnitude < 1e-6f || b.sqrMagnitude < 1e-6f) return 0f;
+        return Vector3.SignedAngle(a, b, u);
+    }
+
+    /// <summary>Возвращает сустав в позу с заданным углом вокруг своей оси.</summary>
+    private void SetJointAngle(int i, float degrees)
+    {
+        Transform j = jointTransforms != null && i < jointTransforms.Length ? jointTransforms[i] : null;
+        if (j == null) return;
+        EnsureAxisCache();
+        if (i >= jointBaseRot.Length) return;
+
+        Quaternion q0 = jointBaseRot[i];
+        Vector3 u = (q0 * jointAxisUnit[i]).normalized;
+        j.localRotation = Quaternion.AngleAxis(degrees, u) * q0;
+    }
+
+    // ------------------------------------------------------------------
+    //  Управление целью
+    // ------------------------------------------------------------------
+
     public override void SetTarget(Vector3 position)
     {
+        targetPosition = position;
+        hasTarget = true;
+
         if (!smoothingInitialized)
         {
             smoothedTargetPosition = position;
-            smoothedTargetRotation = Quaternion.identity;
             smoothingInitialized = true;
-        }
-
-        smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, position, 1f - positionSmoothing);
-
-        targetPosition = smoothedTargetPosition;
-        hasTarget = true;
-        hasRotationTarget = false;
-
-        if (ik != null && ik.target != null)
-        {
-            ik.target.position = smoothedTargetPosition;
         }
     }
 
     public override void SetTarget(Vector3 position, Quaternion rotation)
     {
-        if (!smoothingInitialized)
-        {
-            smoothedTargetPosition = position;
-            smoothedTargetRotation = rotation;
-            smoothingInitialized = true;
-        }
-
-        smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, position, 1f - positionSmoothing);
-        smoothedTargetRotation = Quaternion.Slerp(smoothedTargetRotation, rotation, 1f - rotationSmoothing);
-
-        targetPosition = smoothedTargetPosition;
-        targetRotation = smoothedTargetRotation;
-        hasTarget = true;
-        hasRotationTarget = true;
-
-        if (ik != null && ik.target != null)
-        {
-            ik.target.position = smoothedTargetPosition;
-            ik.target.rotation = smoothedTargetRotation;
-        }
+        // Осевая IK решает ПОЗИЦИЮ; выравнивание ориентации фланца в общем виде
+        // недостижимо (для 6-осевого, как и для SCARA, оператор задаёт точку).
+        SetTarget(position);
+        targetRotation = rotation;
     }
 
     public override void MoveToTarget(float deltaTime)
     {
-        if (ik != null && hasTarget)
+        if (!hasTarget)
         {
-            int n = jointTransforms != null ? jointTransforms.Length : 0;
-            SnapshotPose(rollbackPose, n);
-
-            // Если задана только позиция — не выравниваем ориентацию фланца,
-            // иначе IK конфликтует (identity-поворот недостижим в общем случае).
-            if (hasRotationTarget)
-                ik.SetTarget(targetPosition, targetRotation);
-            else
-                ik.SetTarget(targetPosition);
-
-            ik.Solve(deltaTime);
-
-            if (enableSelfCollisionGuard)
-                ResolveSelfCollision(deltaTime, rollbackPose, n);
+            return;
         }
-        else
-            base.MoveToTarget(deltaTime);
+
+        ResolveRobotReferences();
+        EnsureAxisCache();
+
+        int n = jointTransforms != null ? jointTransforms.Length : 0;
+        if (n == 0 || endEffector == null)
+        {
+            if (!refsReported)
+            {
+                Debug.LogError("[" + name + "] SixAxis: не найдены суставы/фланец — проверьте иерархию (Axis1..Axis6).");
+                refsReported = true;
+            }
+            return;
+        }
+
+        // Плавное движение цели (экспоненциальное сглаживание каждый кадр).
+        float rate = 1f - Mathf.Exp(-deltaTime * Mathf.Max(1f, (1f - positionSmoothing) * 40f) * maxSpeed);
+        smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, targetPosition, rate);
+        if (Vector3.Distance(smoothedTargetPosition, targetPosition) < 0.0005f)
+            smoothedTargetPosition = targetPosition;
+
+        SnapshotPose(rollbackPose, n);
+
+        float settingsSpeed = SettingsData.Instance != null ? SettingsData.Instance.robotSpeed : 1f;
+        int iterations = Mathf.Max(1, Mathf.RoundToInt(ikIterations * Mathf.Max(0.25f, settingsSpeed)));
+        iterations = Mathf.Min(iterations, 40);
+
+        bool reached = DHInverse.SolveCCD(
+            jointTransforms, jointAxesLocal, endEffector,
+            smoothedTargetPosition, iterations, ikTolerance);
+
+        // Визуальная метка цели (legacy IKTarget), если есть.
+        if (ik != null && ik.target != null)
+            ik.target.position = smoothedTargetPosition;
+
+        if (enableSelfCollisionGuard)
+            ResolveSelfCollision(deltaTime, rollbackPose, n);
+
+        _lastReached = reached || Vector3.Distance(endEffector.position, targetPosition) <= ikTolerance;
     }
+
+    private bool _lastReached;
+
+    public bool ReachedTarget { get { return _lastReached; } }
 
     private void SnapshotPose(Quaternion[] buffer, int count)
     {
@@ -436,22 +626,23 @@ public class SixAxisController : RobotController
         return dP.magnitude;
     }
 
+    /// <summary>Ограничивает углы суставов вдоль ИХ осей (от «нулевой» позы).</summary>
     private void ApplyJointLimits()
     {
-        if (jointTransforms == null || jointTransforms.Length == 0 || jointLimits == null || jointLimits.Length == 0)
+        if (jointTransforms == null || jointTransforms.Length == 0 ||
+            jointLimits == null || jointLimits.Length == 0)
             return;
 
-        for (int i = 0; i < jointTransforms.Length && i < jointLimits.Length; i++)
+        EnsureAxisCache();
+        int n = Mathf.Min(jointTransforms.Length, jointLimits.Length);
+        for (int i = 0; i < n; i++)
         {
-            if (jointTransforms[i] == null)
-                continue;
+            if (jointTransforms[i] == null) continue;
 
-            Vector3 angles = jointTransforms[i].localEulerAngles;
-            float rawY = angles.y;
-            float normalized = rawY > 180f ? rawY - 360f : rawY;
-            float clamped = Mathf.Clamp(normalized, jointLimits[i].x, jointLimits[i].y);
-            float smoothed = Mathf.Lerp(normalized, clamped, 0.5f);
-            jointTransforms[i].localEulerAngles = new Vector3(angles.x, smoothed, angles.z);
+            float raw = MeasureJointAngle(i);
+            float clamped = Mathf.Clamp(raw, jointLimits[i].x, jointLimits[i].y);
+            if (Mathf.Abs(clamped - raw) > 0.01f)
+                SetJointAngle(i, clamped);
         }
     }
 
@@ -460,9 +651,11 @@ public class SixAxisController : RobotController
         if (jointTransforms == null)
             return new float[0];
 
+        ResolveRobotReferences();
+        EnsureAxisCache();
         float[] angles = new float[jointTransforms.Length];
         for (int i = 0; i < jointTransforms.Length; i++)
-            angles[i] = jointTransforms[i] != null ? jointTransforms[i].localEulerAngles.y : 0f;
+            angles[i] = jointTransforms[i] != null ? MeasureJointAngle(i) : 0f;
         return angles;
     }
 }
