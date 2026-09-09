@@ -57,9 +57,15 @@ namespace KompasUI
             spawner = gameObject.AddComponent<ObjectSpawner>();
         }
 
+        private bool built;
+
         void Start()
         {
+            if (built) return;
+            built = true;
+
             BuildCanvas();
+            BuildZonesIfNeeded();
 
             Camera cam = MainCamera;
             if (cam != null)
@@ -69,7 +75,7 @@ namespace KompasUI
             }
 
             RuntimeRegistry.RebuildFromScene();
-            RebuildTree();
+            RuntimeRegistry.Changed += OnRegistryChanged;
             SelectNode(RuntimeRegistry.Roots.Count > 0 ? RuntimeRegistry.Roots[0] : null);
         }
 
@@ -82,8 +88,10 @@ namespace KompasUI
         {
             if (EventSystem.current == null)
             {
-                GameObject es = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+                GameObject es = new GameObject("EventSystem", typeof(EventSystem));
                 es.transform.SetParent(transform, false);
+                var module = es.AddComponent<InputSystemUIInputModule>();
+                module.AssignDefaultActions();
             }
         }
 
@@ -182,12 +190,7 @@ namespace KompasUI
 
         void Update()
         {
-            // Строим зоны при первом кадре (после Start канваса и камеры).
-            if (topBar == null)
-            {
-                BuildZonesIfNeeded();
-                RebuildTree();
-            }
+            if (!built) return; // зоны ещё не построены (Start не отработал)
 
             KeepCanvasFacingCamera();
             HandlePlacementInput();

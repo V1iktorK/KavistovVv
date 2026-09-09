@@ -519,7 +519,11 @@ public class FreeFlyCameraController : MonoBehaviour
         laser.SetPosition(1, endpoint);
     }
 
-    /// <summary>Применяет функции рук по нажатию ЛКМ: левая рука задаёт позицию, правая — ориентацию.</summary>
+    /// <summary>
+    /// ЛКМ применяет цели лазеров: КРАСНАЯ (левая рука) ведёт SCARA,
+    /// ЗЕЛЁНАЯ (правая рука) ведёт шестиосевого робота (SixAxis).
+    /// Если нужный тип робота отсутствует — используется робот под лучом.
+    /// </summary>
     private void HandleClickActions()
     {
         bool currentlyPressed = IsMouseButtonPressed(0);
@@ -527,6 +531,41 @@ public class FreeFlyCameraController : MonoBehaviour
         primaryButtonWasPressed = currentlyPressed;
         if (!clicked) return;
 
+        // Какая рука «активна» для этого клика.
+        bool redActive = leftHandEnabled;   // красный лазер (левая)
+        bool greenActive = rightHandEnabled; // зелёный лазер (правая)
+
+        SixAxisController six = FindFirstSixAxis();
+        SCARAController scara = FindFirstScara();
+
+        // Точка назначения: попадание луча в поверхность, иначе TCP робота.
+        Vector3 targetPoint = aimHitSurface
+            ? aimPoint
+            : transform.position + transform.forward * laserLength;
+
+        bool handled = false;
+
+        // Зелёный (правый) лазер управляет шестиосевым.
+        if (greenActive && six != null)
+        {
+            six.SetActive(true);
+            six.SetTarget(targetPoint);
+            handled = true;
+            Debug.Log($"[DesktopTeleoperation] SixAxis '{six.name}' → цель {targetPoint} (зелёный лазер).");
+        }
+
+        // Красный (левый) лазер управляет SCARA.
+        if (redActive && scara != null)
+        {
+            scara.SetActive(true);
+            scara.SetTarget(targetPoint);
+            handled = true;
+            Debug.Log($"[DesktopTeleoperation] SCARA '{scara.name}' → цель {targetPoint} (красный лазер).");
+        }
+
+        if (handled) return;
+
+        // Запасной вариант: робот под лучом (лазеры выключены или тип не найден).
         RobotController selectedRobot = aimHitSurface
             ? FindPreferredRobotController(FindAnyRobotTransformNearAim())
             : null;
@@ -543,30 +582,32 @@ public class FreeFlyCameraController : MonoBehaviour
         if (selectedRobot == null) return;
 
         selectedRobot.SetActive(true);
-
         Vector3 robotTcp = GetRobotTcpPosition(selectedRobot);
-        Vector3 posTarget = robotTcp;
+        Vector3 posTarget = aimHitSurface ? aimPoint : robotTcp;
+        selectedRobot.SetTarget(posTarget);
+        Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} assigned to {selectedRobot.name} (fallback).");
+    }
 
-        // Левая рука (красная) — позиция TCP.
-        if (leftHandEnabled && aimHitSurface)
+    private static SixAxisController FindFirstSixAxis()
+    {
+        SixAxisController[] all = Object.FindObjectsByType<SixAxisController>(FindObjectsInactive.Include);
+        if (all == null || all.Length == 0) return null;
+        foreach (SixAxisController s in all)
         {
-            posTarget = aimPoint;
+            if (s != null && s.isActive) return s;
         }
+        return all[0];
+    }
 
-        Quaternion rotTarget = Quaternion.LookRotation(transform.forward, Vector3.up);
-        // Правая рука (зелёная) — ориентация TCP (куда смотрит инструмент).
-        if (rightHandEnabled)
+    private static SCARAController FindFirstScara()
+    {
+        SCARAController[] all = Object.FindObjectsByType<SCARAController>(FindObjectsInactive.Include);
+        if (all == null || all.Length == 0) return null;
+        foreach (SCARAController s in all)
         {
-            Vector3 orientPoint = aimHitSurface ? aimPoint : transform.position + transform.forward * laserLength;
-            Vector3 lookDir = (orientPoint - robotTcp).normalized;
-            if (lookDir.sqrMagnitude > 0.001f)
-            {
-                rotTarget = Quaternion.LookRotation(lookDir, Vector3.up);
-            }
+            if (s != null && s.isActive) return s;
         }
-
-        selectedRobot.SetTarget(posTarget, rotTarget);
-        Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} rot={rotTarget.eulerAngles} assigned to {selectedRobot.name} (leftHand={leftHandEnabled}, rightHand={rightHandEnabled}).");
+        return all[0];
     }
 
     /// <summary>

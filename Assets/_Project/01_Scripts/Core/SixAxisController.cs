@@ -31,6 +31,7 @@ public class SixAxisController : RobotController
     private Vector3 smoothedTargetPosition;
     private Quaternion smoothedTargetRotation;
     private bool smoothingInitialized;
+    private bool hasRotationTarget;
     private bool selfCollisionSetup;
     private bool jointLimitsInitialized;
     private readonly Quaternion[] rollbackPose = new Quaternion[6];
@@ -151,11 +152,14 @@ public class SixAxisController : RobotController
 
         smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, position, 1f - positionSmoothing);
 
-        if (ik != null && ik.target != null)
-            ik.target.position = smoothedTargetPosition;
-
         targetPosition = smoothedTargetPosition;
         hasTarget = true;
+        hasRotationTarget = false;
+
+        if (ik != null && ik.target != null)
+        {
+            ik.target.position = smoothedTargetPosition;
+        }
     }
 
     public override void SetTarget(Vector3 position, Quaternion rotation)
@@ -173,6 +177,7 @@ public class SixAxisController : RobotController
         targetPosition = smoothedTargetPosition;
         targetRotation = smoothedTargetRotation;
         hasTarget = true;
+        hasRotationTarget = true;
 
         if (ik != null && ik.target != null)
         {
@@ -188,7 +193,13 @@ public class SixAxisController : RobotController
             int n = jointTransforms != null ? jointTransforms.Length : 0;
             SnapshotPose(rollbackPose, n);
 
-            ik.SetTarget(targetPosition, targetRotation);
+            // Если задана только позиция — не выравниваем ориентацию фланца,
+            // иначе IK конфликтует (identity-поворот недостижим в общем случае).
+            if (hasRotationTarget)
+                ik.SetTarget(targetPosition, targetRotation);
+            else
+                ik.SetTarget(targetPosition);
+
             ik.Solve(deltaTime);
 
             if (enableSelfCollisionGuard)
