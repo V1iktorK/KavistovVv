@@ -1,6 +1,24 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+/// <summary>
+/// Свободная камера-«оператор» для телeoперации роботами.
+/// Управление: WASD + Q/E (вертикаль), ПКМ — осмотр.
+///
+/// Функции, добавленные в этой версии:
+///  1) Двухрукавные лазерные указки (левая — КРАСНАЯ, правая — ЗЕЛЁНАЯ).
+///     Каждая включается/выключается ПЕРЕКЛЮЧЕНИЕМ (toggle):
+///        Z — левая рука (красная), X — правая рука (зелёная).
+///     Лучи сходятся в точке прицеливания на поверхности; чем ближе объект,
+///     тем больше угол лучей относительно корпуса камеры.
+///  2) У рук разный функционал:
+///        Левая (красная) — наведение позиции TCP активного робота.
+///        Правая (зелёная) — наведение ориентации TCP (куда «смотрит» инструмент).
+///  3) Маленький коллайдер (CharacterController) на камере: камера врезается
+///     в стены/текстуры, но не проходит сквозь них.
+///  4) Движение/поворот геймпадом, когда активен Gamepad-провайдер (F3),
+///     переключаемое клавишей G (или правым стиком при активном геймпаде).
+/// </summary>
 [RequireComponent(typeof(Camera))]
 public class FreeFlyCameraController : MonoBehaviour
 {
@@ -19,16 +37,43 @@ public class FreeFlyCameraController : MonoBehaviour
     public Vector3 startupPosition = new Vector3(0f, 2f, -28f);
     public Vector3 startupLookAt = new Vector3(12f, -8f, 0f);
 
-    [Header("Desktop teleoperation")]
-    public bool enableLaserPointer = true;
+    [Header("Desktop teleoperation - laser pointers (two hands)")]
+    public bool enableLaserPointer = true;            // мастер-выключатель обеих указок
     public float laserLength = 100f;
-    public float laserHandOffset = 0.35f;
+    public float laserHandOffset = 0.35f;             // латеральное смещение рук от центра
+    public float laserDownOffset = 0.15f;             // опускание рук относительно центра
     public LayerMask laserLayers = Physics.DefaultRaycastLayers;
+
+    [Header("Left hand (RED) - position target, toggle Z")]
+    public bool leftHandEnabled = true;
+    public float leftHandOffset = 0.35f;
+    public Color leftColor = new Color(1f, 0.1f, 0.1f);
+
+    [Header("Right hand (GREEN) - orientation target, toggle X")]
+    public bool rightHandEnabled = false;
+    public float rightHandOffset = 0.35f;
+    public Color rightColor = new Color(0.1f, 1f, 0.3f);
+
+    [Header("Camera collision (bump, not pass-through)")]
+    public bool enableCameraCollision = true;
+    public float bodyRadius = 0.25f;
+    public float bodyHeight = 1.6f;
+    public float bodySkin = 0.02f;
+
+    [Header("Gamepad control (toggle G / right stick)")]
+    public float gamepadLookSensitivity = 1.5f;
 
     private float yaw;
     private float pitch;
-    private LineRenderer laser;
+    private LineRenderer leftLaser;
+    private LineRenderer rightLaser;
     private bool primaryButtonWasPressed;
+    private CharacterController body;
+    private bool gamepadMove;
+
+    // Точка прицеливания (куда смотрит оператор) — на поверхности.
+    private Vector3 aimPoint;
+    private bool aimHitSurface;
 
     private bool IsKeyPressed(KeyCode code)
     {
@@ -44,17 +89,35 @@ public class FreeFlyCameraController : MonoBehaviour
                 case KeyCode.E: return Keyboard.current.eKey.isPressed;
                 case KeyCode.LeftShift: return Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
                 case KeyCode.Escape: return Keyboard.current.escapeKey.wasPressedThisFrame;
+                case KeyCode.Z: return Keyboard.current.zKey.wasPressedThisFrame;
+                case KeyCode.X: return Keyboard.current.xKey.wasPressedThisFrame;
+                case KeyCode.G: return Keyboard.current.gKey.wasPressedThisFrame;
+                case KeyCode.F: return Keyboard.current.fKey.wasPressedThisFrame;
             }
         }
 
         try
         {
-            return Input.GetKey(code);
+            switch (code)
+            {
+                case KeyCode.W: return Input.GetKey(KeyCode.W);
+                case KeyCode.S: return Input.GetKey(KeyCode.S);
+                case KeyCode.A: return Input.GetKey(KeyCode.A);
+                case KeyCode.D: return Input.GetKey(KeyCode.D);
+                case KeyCode.Q: return Input.GetKey(KeyCode.Q);
+                case KeyCode.E: return Input.GetKey(KeyCode.E);
+                case KeyCode.LeftShift: return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+                case KeyCode.Escape: return Input.GetKeyDown(KeyCode.Escape);
+                case KeyCode.Z: return Input.GetKeyDown(KeyCode.Z);
+                case KeyCode.X: return Input.GetKeyDown(KeyCode.X);
+                case KeyCode.G: return Input.GetKeyDown(KeyCode.G);
+                case KeyCode.F: return Input.GetKeyDown(KeyCode.F);
+            }
         }
         catch
         {
-            return false;
         }
+        return false;
     }
 
     private bool IsMouseButtonPressed(int button)
@@ -124,22 +187,49 @@ public class FreeFlyCameraController : MonoBehaviour
             transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
         }
 
-        if (enableLaserPointer)
-        {
-            laser = gameObject.GetComponent<LineRenderer>();
-            if (laser == null)
-            {
-                laser = gameObject.AddComponent<LineRenderer>();
-            }
+        EnsureLaserComponent(ref leftLaser);
+        EnsureLaserComponent(ref rightLaser);
 
-            laser.positionCount = 2;
-            laser.useWorldSpace = true;
-            laser.startWidth = 0.018f;
-            laser.endWidth = 0.006f;
-            laser.startColor = Color.red;
-            laser.endColor = new Color(1f, 0.1f, 0.1f, 0.15f);
-            laser.material = new Material(Shader.Find("Sprites/Default"));
+        if (enableCameraCollision)
+        {
+            body = GetComponent<CharacterController>();
+            if (body == null)
+            {
+                body = gameObject.AddComponent<CharacterController>();
+            }
+            body.radius = bodyRadius;
+            body.height = bodyHeight;
+            body.skinWidth = bodySkin;
+            body.center = new Vector3(0f, bodyHeight * 0.5f, 0f);
         }
+    }
+
+    private void EnsureLaserComponent(ref LineRenderer laser)
+    {
+        // Лазеры добавляются как отдельные компоненты, чтобы левая и правая
+        // руки не делили один и тот же LineRenderer.
+        var existing = GetComponents<LineRenderer>();
+        LineRenderer found = null;
+        foreach (var lr in existing)
+        {
+            if (lr != null && object.ReferenceEquals(lr, laser))
+            {
+                found = lr;
+                break;
+            }
+        }
+        if (found == null)
+        {
+            found = gameObject.AddComponent<LineRenderer>();
+        }
+
+        found.positionCount = 2;
+        found.useWorldSpace = true;
+        found.startWidth = 0.018f;
+        found.endWidth = 0.006f;
+        found.material = new Material(Shader.Find("Sprites/Default"));
+        found.enabled = false;
+        laser = found;
     }
 
     void Start()
@@ -173,6 +263,12 @@ public class FreeFlyCameraController : MonoBehaviour
         }
     }
 
+    private bool IsGamepadActive()
+    {
+        // Геймпад считается активным, если он подключён (через new Input System).
+        return Gamepad.current != null;
+    }
+
     void Update()
     {
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
@@ -195,8 +291,34 @@ public class FreeFlyCameraController : MonoBehaviour
             }
         }
 
+        bool gamepadMode = IsGamepadActive();
+
+        // Переключаемое управление геймпадом: клавиша G (на клавиатуре),
+        // либо при активном геймпаде — правый стик нажатый (R3). При включении
+        // управления камера начинает слушать стики геймпада.
+        if (IsKeyPressed(KeyCode.G))
+        {
+            gamepadMove = !gamepadMove;
+            Debug.Log("[FreeFlyCamera] Управление геймпадом: " + (gamepadMove ? "ВКЛ" : "ВЫКЛ"));
+        }
+        if (gamepadMode && Gamepad.current != null && Gamepad.current.rightStickButton.wasPressedThisFrame)
+        {
+            gamepadMove = !gamepadMove;
+            Debug.Log("[FreeFlyCamera] Управление геймпадом (стик): " + (gamepadMove ? "ВКЛ" : "ВЫКЛ"));
+        }
+
+        // Переключение рук-лазеров (toggle) клавишами Z / X.
+        if (IsKeyPressed(KeyCode.Z)) leftHandEnabled = !leftHandEnabled;
+        if (IsKeyPressed(KeyCode.X)) rightHandEnabled = !rightHandEnabled;
+
+        // Выбор активного робота по клавише F (или кнопке смены устройства).
+        if (IsKeyPressed(KeyCode.F)) SelectNextRobot();
+        else if (gamepadMode && Gamepad.current != null && Gamepad.current.leftShoulder.wasPressedThisFrame)
+            SelectNextRobot();
+
         bool rightMouseHeld = IsMouseButtonPressed(1);
-        if (rightMouseHeld)
+        bool lookFromMouse = rightMouseHeld;
+        if (lookFromMouse)
         {
             if (Cursor.lockState != CursorLockMode.Locked)
             {
@@ -215,8 +337,21 @@ public class FreeFlyCameraController : MonoBehaviour
             transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
         }
 
-        UpdateLaserPointer();
+        // Поворот геймпадом (правый стик), переключаемо.
+        if (gamepadMove && gamepadMode && Gamepad.current != null)
+        {
+            Vector2 rot = Gamepad.current.rightStick.ReadValue();
+            float lookX = rot.x * gamepadLookSensitivity * 100f * Time.deltaTime;
+            float lookY = rot.y * gamepadLookSensitivity * 100f * Time.deltaTime * (invertY ? 1f : -1f);
+            yaw += lookX;
+            pitch = Mathf.Clamp(pitch - lookY, -89f, 89f);
+            transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+        }
 
+        UpdateLaserPointers();
+        HandleClickActions();
+
+        // --- Движение ---
         float speed = IsKeyPressed(KeyCode.LeftShift) ? sprintSpeed * boostMultiplier : moveSpeed;
         Vector3 move = Vector3.zero;
 
@@ -227,74 +362,201 @@ public class FreeFlyCameraController : MonoBehaviour
         if (IsKeyPressed(KeyCode.E)) move += Vector3.up * verticalSpeed;
         if (IsKeyPressed(KeyCode.Q)) move -= Vector3.up * verticalSpeed;
 
+        // Геймпад: левый стик — горизонтальное движение (переключаемо).
+        if (gamepadMove && gamepadMode && Gamepad.current != null)
+        {
+            Vector2 stick = Gamepad.current.leftStick.ReadValue();
+            Vector3 planar = transform.forward * stick.y + transform.right * stick.x;
+            if (planar.sqrMagnitude > 0f)
+            {
+                planar.y = 0f;
+                move += planar.normalized * speed;
+            }
+        }
+
         if (move.sqrMagnitude > 0f)
         {
             move = move.normalized * speed * Time.deltaTime;
-            transform.position += move;
+            if (body != null)
+            {
+                // CharacterController даёт «врезание»: скользит вдоль стен, не проходит сквозь них.
+                body.Move(move);
+            }
+            else
+            {
+                transform.position += move;
+            }
+        }
+        // Если есть коллайдер — слегка прижимаем камеру к поверхности (не проходим сквозь пол).
+        if (body != null && enableCameraCollision)
+        {
+            body.Move(Vector3.down * 0.05f * Time.deltaTime);
         }
     }
 
-    private void UpdateLaserPointer()
+    /// <summary>Обновляет лучи обеих рук так, чтобы они сходились в точке прицеливания на поверхности.</summary>
+    private void UpdateLaserPointers()
     {
-        if (!enableLaserPointer || laser == null)
+        if (!enableLaserPointer)
         {
+            if (leftLaser != null) leftLaser.enabled = false;
+            if (rightLaser != null) rightLaser.enabled = false;
             return;
         }
 
-        Vector3 origin = transform.position - transform.right * laserHandOffset - transform.up * 0.15f;
-        Vector3 direction = transform.forward;
-        Vector3 endpoint = origin + direction * laserLength;
+        ComputeAimPoint();
 
-        bool hasHit = Physics.Raycast(
-            origin,
-            direction,
-            out RaycastHit hit,
-            laserLength,
-            laserLayers,
-            QueryTriggerInteraction.Ignore);
-        if (hasHit)
+        if (leftHandEnabled) DrawHandLaser(leftLaser, -1f, leftHandOffset, leftColor);
+        else if (leftLaser != null) leftLaser.enabled = false;
+
+        if (rightHandEnabled) DrawHandLaser(rightLaser, 1f, rightHandOffset, rightColor);
+        else if (rightLaser != null) rightLaser.enabled = false;
+    }
+
+    /// <summary>Считает центральную точку прицеливания (куда направлен корпус оператора).</summary>
+    private void ComputeAimPoint()
+    {
+        Vector3 center = transform.position + transform.up * 0.1f;
+        aimPoint = center + transform.forward * laserLength;
+        aimHitSurface = false;
+
+        Ray ray = new Ray(center, transform.forward);
+        if (Physics.Raycast(ray, out RaycastHit hit, laserLength, laserLayers, QueryTriggerInteraction.Ignore))
         {
-            endpoint = hit.point;
+            aimPoint = hit.point;
+            aimHitSurface = true;
         }
         else
         {
             Plane workPlane = new Plane(Vector3.up, Vector3.zero);
-            if (workPlane.Raycast(new Ray(origin, direction), out float planeDistance) &&
-                planeDistance >= 0f && planeDistance <= laserLength)
+            if (workPlane.Raycast(ray, out float planeDistance) && planeDistance >= 0f && planeDistance <= laserLength)
             {
-                endpoint = origin + direction * planeDistance;
+                aimPoint = center + transform.forward * planeDistance;
+                aimHitSurface = true;
             }
         }
+    }
 
-        if (IsMouseButtonPressed(0) && !primaryButtonWasPressed)
+    /// <summary>Рисует луч от руки к цели; при близкой цели угол луча больше (сходимость).</summary>
+    private void DrawHandLaser(LineRenderer laser, float side, float offset, Color color)
+    {
+        if (laser == null) return;
+
+        // Рука смещена вбок и немного вниз от центра камеры.
+        Vector3 hand = transform.position
+                       + transform.right * (side * offset)
+                       - transform.up * laserDownOffset;
+
+        Vector3 endpoint;
+        if (aimHitSurface && Vector3.Distance(hand, aimPoint) > 0.001f)
         {
-            RobotController selectedRobot = hasHit
-                ? FindPreferredRobotController(hit.collider.transform)
-                : null;
-            if (selectedRobot == null)
+            // Луч идёт от руки к целевой точке поверхности.
+            Vector3 dir = (aimPoint - hand).normalized;
+            Ray ray = new Ray(hand, dir);
+            float maxDist = Mathf.Max(Vector3.Distance(hand, aimPoint), 0.01f);
+            if (Physics.Raycast(ray, out RaycastHit hit, maxDist, laserLayers, QueryTriggerInteraction.Ignore))
             {
-                selectedRobot = FindRobotNearRay(origin, direction, laserLength);
+                endpoint = hit.point;
             }
-            if (selectedRobot == null)
+            else
             {
-                RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
-                if (robots.Length > 0)
-                {
-                    selectedRobot = robots[0];
-                }
+                endpoint = aimPoint;
             }
+        }
+        else
+        {
+            endpoint = hand + transform.forward * laserLength;
+        }
 
-            if (selectedRobot != null)
+        laser.startColor = color;
+        laser.endColor = new Color(color.r, color.g, color.b, 0.15f);
+        laser.enabled = true;
+        laser.SetPosition(0, hand);
+        laser.SetPosition(1, endpoint);
+    }
+
+    /// <summary>Применяет функции рук по нажатию ЛКМ: левая рука задаёт позицию, правая — ориентацию.</summary>
+    private void HandleClickActions()
+    {
+        bool currentlyPressed = IsMouseButtonPressed(0);
+        bool clicked = currentlyPressed && !primaryButtonWasPressed;
+        primaryButtonWasPressed = currentlyPressed;
+        if (!clicked) return;
+
+        RobotController selectedRobot = aimHitSurface
+            ? FindPreferredRobotController(FindAnyRobotTransformNearAim())
+            : null;
+        if (selectedRobot == null)
+        {
+            selectedRobot = FindRobotNearRay(transform.position, transform.forward, laserLength);
+        }
+        if (selectedRobot == null)
+        {
+            RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+            if (robots.Length > 0) selectedRobot = robots[0];
+        }
+
+        if (selectedRobot == null) return;
+
+        selectedRobot.SetActive(true);
+
+        Vector3 posTarget = selectedRobot.tcp != null
+            ? selectedRobot.tcp.position
+            : selectedRobot.transform.position;
+
+        // Левая рука (красная) — позиция TCP.
+        if (leftHandEnabled && aimHitSurface)
+        {
+            posTarget = aimPoint;
+        }
+
+        Quaternion rotTarget = Quaternion.LookRotation(transform.forward, Vector3.up);
+        // Правая рука (зелёная) — ориентация TCP (куда смотрит инструмент).
+        if (rightHandEnabled)
+        {
+            Vector3 orientPoint = aimHitSurface ? aimPoint : transform.position + transform.forward * laserLength;
+            Vector3 lookDir = (orientPoint - selectedRobot.tcp.position).normalized;
+            if (lookDir.sqrMagnitude > 0.001f)
             {
-                selectedRobot.SetActive(true);
-                selectedRobot.SetTarget(endpoint, Quaternion.LookRotation(transform.forward, Vector3.up));
-                Debug.Log($"[DesktopTeleoperation] Target {endpoint} assigned to {selectedRobot.name}.");
+                rotTarget = Quaternion.LookRotation(lookDir, Vector3.up);
             }
         }
 
-        laser.SetPosition(0, origin);
-        laser.SetPosition(1, endpoint);
-        primaryButtonWasPressed = IsMouseButtonPressed(0);
+        selectedRobot.SetTarget(posTarget, rotTarget);
+        Debug.Log($"[DesktopTeleoperation] Target pos={posTarget} rot={rotTarget.eulerAngles} assigned to {selectedRobot.name} (leftHand={leftHandEnabled}, rightHand={rightHandEnabled}).");
+    }
+
+    /// <summary>Циклически выбирает следующего робота в сцене (клавиша F).</summary>
+    private void SelectNextRobot()
+    {
+        RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+        if (robots == null || robots.Length == 0) return;
+
+        // Ищем текущего «активного» (с подсветкой) как точку отсчёта.
+        int activeIdx = -1;
+        for (int i = 0; i < robots.Length; i++)
+        {
+            if (robots[i] != null && robots[i].isActive)
+            {
+                activeIdx = i;
+                break;
+            }
+        }
+
+        int next = (activeIdx + 1) % robots.Length;
+        for (int i = 0; i < robots.Length; i++)
+        {
+            if (robots[i] != null) robots[i].SetActive(i == next);
+        }
+
+        if (robots[next] != null)
+            Debug.Log("[FreeFlyCamera] Активный робот: " + robots[next].robotName);
+    }
+
+    private Transform FindAnyRobotTransformNearAim()
+    {
+        RobotController c = FindRobotNearRay(transform.position, transform.forward, laserLength);
+        return c != null ? c.transform : null;
     }
 
     private static RobotController FindRobotNearRay(Vector3 origin, Vector3 direction, float maxDistance)
@@ -322,6 +584,7 @@ public class FreeFlyCameraController : MonoBehaviour
 
     private static RobotController FindPreferredRobotController(Transform source)
     {
+        if (source == null) return null;
         SCARAController scara = source.GetComponentInParent<SCARAController>();
         if (scara != null) return scara;
 

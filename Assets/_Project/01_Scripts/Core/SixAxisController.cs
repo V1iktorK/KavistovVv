@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 /// <summary>
 /// Контроллер 6-осного манипулятора на базе инверсной кинематики (InverseKinematics).
@@ -20,11 +20,22 @@ public class SixAxisController : RobotController
     [Header("Joint Limits")]
     public Vector2[] jointLimits = new Vector2[6];
 
+    [Header("Self-collision guard")]
+    [Tooltip("Разрешить кинематический самоколлизионный запрет движения")]
+    public bool enableSelfCollisionGuard = true;
+    [Tooltip("Радиус звеньев для проверки самопересечения звеньев")]
+    public float linkRadius = 0.07f;
+    [Tooltip("При коллизии откатывать только конфликтующие суставы (иначе стоп всего движения)")]
+    public bool selectiveRollback = true;
+
     private Vector3 smoothedTargetPosition;
     private Quaternion smoothedTargetRotation;
     private bool smoothingInitialized;
     private bool selfCollisionSetup;
     private bool jointLimitsInitialized;
+    private readonly Quaternion[] rollbackPose = new Quaternion[6];
+
+    public bool SelfCollisionBlocked { get; private set; }
 
     void Update()
     {
@@ -167,11 +178,154 @@ public class SixAxisController : RobotController
     {
         if (ik != null && hasTarget)
         {
+            int n = jointTransforms != null ? jointTransforms.Length : 0;
+            SnapshotPose(rollbackPose, n);
+
             ik.SetTarget(targetPosition, targetRotation);
             ik.Solve(deltaTime);
+
+            if (enableSelfCollisionGuard)
+                ResolveSelfCollision(deltaTime, rollbackPose, n);
         }
         else
             base.MoveToTarget(deltaTime);
+    }
+
+    private void SnapshotPose(Quaternion[] buffer, int count)
+    {
+        for (int i = 0; i < count && i < jointTransforms.Length && i < buffer.Length; i++)
+        {
+            buffer[i] = jointTransforms[i] != null ? jointTransforms[i].localRotation : Quaternion.identity;
+        }
+    }
+
+    /// <summary>
+    /// Проверяет самопересечение звеньев робота (капсульные отрезки между осями).
+    /// Если пересечение есть — откатывает суставы в безопасную позу, чтобы корпус
+    /// не проходил сквозь себя, либо (селективно) только конфликтующие.
+    /// </summary>
+    private void ResolveSelfCollision(float deltaTime, Quaternion[] pose, int count)
+    {
+        if (count < 2) return;
+
+        // Ищем пару конфликтующих (не соседних) звеньев.
+        bool collision = TryFindSelfCollision(out int a, out int b);
+
+        if (!collision)
+        {
+            SelfCollisionBlocked = false;
+            return;
+        }
+
+        // Откат: возвращаем суставы в позу до IK (полный или селективный).
+        int lo = selectiveRollback ? Mathf.Max(0, a - 1) : 0;
+        int hi = selectiveRollback ? Mathf.Min(count - 1, b + 1) : count - 1;
+        for (int i = lo; i <= hi; i++)
+        {
+            if (i < 0 || i >= count) continue;
+            var j = jointTransforms[i];
+            if (j == null) continue;
+            float blend = Mathf.Clamp01(deltaTime * 12f);
+            j.localRotation = Quaternion.Slerp(j.localRotation, pose[i], blend);
+        }
+
+        if (!SelfCollisionBlocked)
+        {
+            SelfCollisionBlocked = true;
+            Debug.LogWarning($"[SixAxis] Самостолкновение звеньев {a} и {b} — движение приостановлено, выполнен откат. " +
+                             "Попробуйте другую цель/траекторию.");
+        }
+    }
+
+    /// <summary>Ищет первую пару не-соседних звеньев, капсулы которых пересекаются.</summary>
+    private bool TryFindSelfCollision(out int indexA, out int indexB)
+    {
+        indexA = -1;
+        indexB = -1;
+        if (jointTransforms == null) return false;
+
+        for (int i = 0; i < jointTransforms.Length - 1; i++)
+        {
+            if (jointTransforms[i] == null) continue;
+            for (int k = i + 1; k < jointTransforms.Length; k++)
+            {
+                if (jointTransforms[k] == null) continue;
+                if (k == i + 1) continue; // соседние звенья соединены — игнорируем
+
+                if (SegmentsOverlap(jointTransforms, i, k, linkRadius))
+                {
+                    indexA = i;
+                    indexB = k;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static bool SegmentsOverlap(Transform[] joints, int i, int k, float radius)
+    {
+        Vector3 a1 = joints[i].position;
+        Vector3 a2 = i + 1 < joints.Length ? joints[i + 1].position : a1 + joints[i].up * 0.1f;
+        Vector3 b1 = joints[k].position;
+        Vector3 b2 = k + 1 < joints.Length ? joints[k + 1].position : b1 + joints[k].up * 0.1f;
+
+        return ClosestDistanceBetweenSegments(a1, a2, b1, b2) < radius * 2f;
+    }
+
+    /// <summary>Минимальное расстояние между двумя отрезками (3D).</summary>
+    public static float ClosestDistanceBetweenSegments(
+        Vector3 p1, Vector3 p2, Vector3 q1, Vector3 q2)
+    {
+        Vector3 u = p2 - p1;
+        Vector3 v = q2 - q1;
+        Vector3 w = p1 - q1;
+
+        float a = Vector3.Dot(u, u);
+        float b = Vector3.Dot(u, v);
+        float c = Vector3.Dot(v, v);
+        float d = Vector3.Dot(u, w);
+        float e = Vector3.Dot(v, w);
+
+        float denom = a * c - b * b;
+        float sN, sD = denom;
+        float tN, tD = denom;
+
+        if (denom < 1e-6f)
+        {
+            sN = 0f;
+            sD = 1f;
+            tN = e;
+            tD = c;
+        }
+        else
+        {
+            sN = b * e - c * d;
+            tN = a * e - b * d;
+            if (sN < 0f) { sN = 0f; tN = e; tD = c; }
+            else if (sN > sD) { sN = sD; tN = e + b; tD = c; }
+        }
+
+        if (tN < 0f)
+        {
+            tN = 0f;
+            if (-d < 0f) sN = 0f;
+            else if (-d > a) sN = sD;
+            else { sN = -d; sD = a; }
+        }
+        else if (tN > tD)
+        {
+            tN = tD;
+            if (-d + b < 0f) sN = 0f;
+            else if (-d + b > a) sN = sD;
+            else { sN = (-d + b); sD = a; }
+        }
+
+        float sc = Mathf.Abs(sN) < 1e-6f ? 0f : sN / sD;
+        float tc = Mathf.Abs(tN) < 1e-6f ? 0f : tN / tD;
+
+        Vector3 dP = w + (sc * u) - (tc * v);
+        return dP.magnitude;
     }
 
     private void ApplyJointLimits()

@@ -120,8 +120,8 @@ public class KeyboardMouseInputProvider : InputProvider
     public override bool GetSwitchRobotDown()
     {
         if (Keyboard.current != null)
-            return Keyboard.current.tabKey.wasPressedThisFrame;
-        return TryLegacyKeyDown(KeyCode.Tab);
+            return Keyboard.current.tabKey.wasPressedThisFrame || Keyboard.current.fKey.wasPressedThisFrame;
+        return TryLegacyKeyDown(KeyCode.Tab) || TryLegacyKeyDown(KeyCode.F);
     }
 
     public override bool GetRecordDown()

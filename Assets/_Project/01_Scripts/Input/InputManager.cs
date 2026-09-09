@@ -101,6 +101,8 @@ public class InputManager : MonoBehaviour
             if (Input.GetKeyDown(KeyCode.F3)) SetInputDevice(InputDevice.Gamepad);
         }
     }
+
+    public void SetInputDevice(InputDevice device)
     {
         if (activeProvider != null)
             activeProvider.enabled = false;
