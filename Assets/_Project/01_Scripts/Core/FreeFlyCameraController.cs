@@ -16,10 +16,10 @@ using UnityEngine.InputSystem;
 ///        Правая (зелёная) — наведение ориентации TCP (куда «смотрит» инструмент).
 ///  3) Маленький коллайдер (CharacterController) на камере: камера врезается
 ///     в стены/текстуры, но не проходит сквозь них.
-///  4) TAB — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
+///  4) CAPS LOCK — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
 ///     свободен (можно нажимать кнопки панелей). Клик по UI курсор НЕ прячет;
 ///     клик по рабочему пространству (миру) — возврат к захваченному курсору
-///     (положение «до нажатия TAB»).
+///     (положение «до нажатия»).
 ///  5) G — ФОНАРИК (spot-свет на камере), включение/выключение.
 ///  6) Управление геймпадом (стики) активно, когда геймпад подключён и курсор
 ///     захвачен (телеоперация); тумблер — R3 (нажатие правого стика).
@@ -103,7 +103,7 @@ public class FreeFlyCameraController : MonoBehaviour
                 case KeyCode.E: return Keyboard.current.eKey.isPressed;
                 case KeyCode.LeftShift: return Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
                 case KeyCode.Escape: return Keyboard.current.escapeKey.wasPressedThisFrame;
-                case KeyCode.Tab: return Keyboard.current.tabKey.wasPressedThisFrame;
+                case KeyCode.CapsLock: return Keyboard.current.capsLockKey.wasPressedThisFrame;
                 case KeyCode.Z: return Keyboard.current.zKey.wasPressedThisFrame;
                 case KeyCode.X: return Keyboard.current.xKey.wasPressedThisFrame;
                 case KeyCode.G: return Keyboard.current.gKey.wasPressedThisFrame;
@@ -123,7 +123,7 @@ public class FreeFlyCameraController : MonoBehaviour
                 case KeyCode.E: return Input.GetKey(KeyCode.E);
                 case KeyCode.LeftShift: return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
                 case KeyCode.Escape: return Input.GetKeyDown(KeyCode.Escape);
-                case KeyCode.Tab: return Input.GetKeyDown(KeyCode.Tab);
+                case KeyCode.CapsLock: return Input.GetKeyDown(KeyCode.CapsLock);
                 case KeyCode.Z: return Input.GetKeyDown(KeyCode.Z);
                 case KeyCode.X: return Input.GetKeyDown(KeyCode.X);
                 case KeyCode.G: return Input.GetKeyDown(KeyCode.G);
@@ -406,10 +406,10 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         bool gamepadMode = IsGamepadActive();
 
-        // TAB — переключение РЕЖИМА UI: курсор виден + панели KOMPAS показаны
+        // CAPS LOCK — переключение РЕЖИМА UI: курсор виден + панели KOMPAS показаны
         // (телеоперация: курсор захвачен + панели скрыты).
         // Клик по UI курсор не прячет; клик по миру — возврат к телеоперации.
-        if (IsKeyPressed(KeyCode.Tab))
+        if (IsKeyPressed(KeyCode.CapsLock))
         {
             ToggleUiMode();
         }
@@ -813,7 +813,7 @@ public class FreeFlyCameraController : MonoBehaviour
     }
 
     /// <summary>
-    /// TAB: режим UI (курсор виден + панели KOMPAS видны) ⟷ телеоперация
+    /// CAPS LOCK: режим UI (курсор виден + панели KOMPAS видны) ⟷ телеоперация
     /// (курсор захвачен, панели скрыты). UI в Screen Space Overlay — виден
     /// всегда и не «режется» геометрией сцены.
     /// </summary>
@@ -824,7 +824,7 @@ public class FreeFlyCameraController : MonoBehaviour
         {
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
-            Debug.Log("[FreeFlyCamera] Режим UI: курсор + панели (TAB/клик по миру — обратно).");
+            Debug.Log("[FreeFlyCamera] Режим UI: курсор + панели (CapsLock/клик по миру — обратно).");
         }
         else
         {

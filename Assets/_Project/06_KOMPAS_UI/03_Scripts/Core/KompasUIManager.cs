@@ -43,6 +43,14 @@ namespace KompasUI
         [Tooltip("Тёплая температура, K")]
         public float lampTemperature = 2700f;
 
+        [Header("Светоотражение рабочих объектов")]
+        [Tooltip("Роботы и столы отражают свет сильнее (ярче/гладче), чем ангар/пол — без новых источников")]
+        public bool enableLightBoost = true;
+        [Tooltip("Множитель albedo (базовый цвет) роботов/столов")]
+        public float lightBoostAlbedo = 1.25f;
+        [Tooltip("Добавка к smoothness роботов/столов")]
+        public float lightBoostSmoothness = 0.08f;
+
         private Canvas canvas;
         private RectTransform canvasRect;
 
@@ -63,6 +71,8 @@ namespace KompasUI
         // Размещение роботов.
         private RobotController pendingRobotTemplate;   // выбранный тип (SCARA/6-осевой)
         private Transform pendingTable;                 // стол, на который ставим
+        private bool yawManual;                         // направление задано вручную
+        private Transform yawTrackedTable;              // стол, для которого применена подсказка
 
         private Camera MainCamera
         {
@@ -130,7 +140,60 @@ namespace KompasUI
 
             if (spawner != null) spawner.RefreshRobotTemplates();
             EnsureWorkLamp();
+            BoostLighting();
             SelectNode(RuntimeRegistry.Roots.Count > 0 ? RuntimeRegistry.Roots[0] : null);
+        }
+
+        /// <summary>
+        /// Роботы и столы «отражают» свет сильнее: поднимаем albedo и smoothness
+        /// их HDRP-материалов (среда/ангар не трогаются). Вызывается на старте
+        /// и при каждом изменении реестра (новые роботы/столы).
+        /// </summary>
+        private void BoostLighting()
+        {
+            if (!enableLightBoost) return;
+
+            var robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+            foreach (RobotController rc in robots)
+            {
+                if (rc == null || rc.name.StartsWith("Phantom")) continue;
+                BoostRenderers(rc.transform);
+            }
+            var markers = Object.FindObjectsByType<RegisteredObject>(FindObjectsInactive.Include);
+            foreach (RegisteredObject mo in markers)
+            {
+                if (mo == null || mo.name.StartsWith("Phantom")) continue;
+                BoostRenderers(mo.transform);
+            }
+            Transform table = FindFirstTableSurface();
+            if (table != null && table.GetComponentInParent<RobotController>() == null)
+                BoostRenderers(table.transform);
+        }
+
+        private void BoostRenderers(Transform root)
+        {
+            if (root == null) return;
+            // Каждый объект усиливаем один раз (маркер на корне).
+            if (root.GetComponent<BoostedObjectMarker>() != null) return;
+            root.gameObject.AddComponent<BoostedObjectMarker>();
+
+            foreach (Renderer r in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (r == null) continue;
+                Material m = r.material;
+                if (m == null) continue;
+                if (m.HasProperty("_BaseColor"))
+                {
+                    Color c = m.GetColor("_BaseColor");
+                    m.SetColor("_BaseColor", new Color(
+                        Mathf.Min(1.4f, c.r * lightBoostAlbedo),
+                        Mathf.Min(1.4f, c.g * lightBoostAlbedo),
+                        Mathf.Min(1.4f, c.b * lightBoostAlbedo),
+                        c.a));
+                }
+                if (m.HasProperty("_Smoothness"))
+                    m.SetFloat("_Smoothness", Mathf.Min(0.95f, m.GetFloat("_Smoothness") + lightBoostSmoothness));
+            }
         }
 
         /// <summary>
@@ -278,6 +341,7 @@ namespace KompasUI
         {
             // Если стол появился/размещён — вешаем «лампочку Ильича» (один раз).
             EnsureWorkLamp();
+            BoostLighting(); // новые роботы/столы тоже «отражают» сильнее
             RebuildTree();
         }
 
@@ -316,6 +380,8 @@ namespace KompasUI
             if (kind == SpawnKind.None)
             {
                 pendingRobotTemplate = null;
+                yawManual = false;
+                yawTrackedTable = null;
             }
             centerWindow.StartPlacement(kind);
         }
@@ -346,8 +412,11 @@ namespace KompasUI
             }
 
             pendingRobotTemplate = template;
+            yawManual = false;
+            yawTrackedTable = null;
             Debug.Log("[KompasUI] Размещение робота: " + template.robotName +
                       " (наведите на стол, ←/→ направление, ЛКМ/Enter — поставить)");
+            centerWindow.SetPhantomTemplate(template); // фантом реальной модели
             centerWindow.StartPlacement(SpawnKind.Robot);
         }
 
@@ -465,7 +534,10 @@ namespace KompasUI
                     catch { }
                 }
                 if (rot != 0f)
+                {
+                    yawManual = true; // ручное направление — авто-подсказку больше не применяем
                     centerWindow.RotateRobot(rot * Time.deltaTime);
+                }
             }
 
             Camera cam = MainCamera;
@@ -492,6 +564,10 @@ namespace KompasUI
             {
                 valid = hit && hitInfo.normal.y > 0.3f;
             }
+
+            // Авто-направление «по четвертям стола» (если не крутили стрелками).
+            if (centerWindow.ActiveKind == SpawnKind.Robot && !yawManual && hit && pendingTable != null)
+                SuggestRobotYaw(hitInfo.point);
 
             centerWindow.UpdatePreview(placePoint, valid);
 
@@ -553,6 +629,7 @@ namespace KompasUI
             {
                 if (rc == null) continue;
                 if (rc.GetComponent<RegisteredObject>() == null) continue; // только копии UI
+                if (IsRobotTemplate(rc)) continue; // шаблоны не удаляем
                 Vector3 p = rc.transform.position;
                 if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ &&
                     p.y >= minY && p.y <= maxY)
@@ -564,6 +641,17 @@ namespace KompasUI
             }
         }
 
+        /// <summary>True, если робот — шаблон для копирования (не удаляем его).</summary>
+        private bool IsRobotTemplate(RobotController robot)
+        {
+            if (spawner == null || spawner.robotTemplates == null) return false;
+            foreach (RobotController t in spawner.robotTemplates)
+            {
+                if (t != null && t == robot) return true;
+            }
+            return false;
+        }
+
         /// <summary>Делает робота единственным основным (подсветка/телеметрия).</summary>
         private static void ActivateRobotOnly(RobotController keep)
         {
@@ -572,6 +660,35 @@ namespace KompasUI
             foreach (RobotController rc in robots)
             {
                 if (rc != null) rc.SetActive(rc == keep);
+            }
+        }
+
+        /// <summary>
+        /// Подсказка направления фантома: стол мысленно делится на 4 части линиями
+        /// через центр; чем ближе прицел к центру/границам, тем «вероятнее» (но
+        /// детерминированно) фантом поворачивается в сторону прицела — доворот
+        /// кратен 90° с гистерезисом, чтобы не дёргался у границ частей.
+        /// </summary>
+        private void SuggestRobotYaw(Vector3 aimPoint)
+        {
+            if (pendingTable == null || centerWindow == null) return;
+
+            Bounds b = GetRenderBounds(pendingTable);
+            Vector3 center = new Vector3(b.center.x, 0f, b.center.z);
+            Vector3 delta = aimPoint - center;
+            delta.y = 0f;
+            if (delta.sqrMagnitude < 0.01f) return; // прицел в самом центре — не угадываем
+
+            float raw = Mathf.Atan2(delta.x, delta.z) * Mathf.Rad2Deg; // фантом «смотрит» на прицел
+            float snapped = Mathf.Round(raw / 90f) * 90f;
+
+            bool newTable = yawTrackedTable != pendingTable;
+            float current = centerWindow.RobotYaw;
+            float diff = Mathf.DeltaAngle(current, snapped);
+            if (newTable || Mathf.Abs(diff) > 45f)
+            {
+                yawTrackedTable = pendingTable;
+                centerWindow.SetRobotYaw(snapped);
             }
         }
 
@@ -650,5 +767,10 @@ namespace KompasUI
             RuntimeRegistry.RebuildFromScene();
             RebuildTree();
         }
+    }
+
+    /// <summary>Маркер «объект уже получил усиление светоотражения».</summary>
+    public class BoostedObjectMarker : MonoBehaviour
+    {
     }
 }

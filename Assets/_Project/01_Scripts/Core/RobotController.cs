@@ -13,6 +13,10 @@ public class RobotController : MonoBehaviour
     [Range(0.1f, 5f)] public float maxSpeed = 1f;
     [HideInInspector] public bool isActive = false;
 
+    [Header("Скорость перемещения")]
+    [Tooltip("Общий множитель скорости всех роботов (0.34 ≈ в 3 раза медленнее стандартной)")]
+    public float movementSpeedScale = 0.34f;
+
     [Header("Industry 4.0 - Telemetry")]
     public bool telemetryEnabled = true;
     public float jointTemperature = 25f;

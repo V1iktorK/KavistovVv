@@ -548,7 +548,8 @@ public class SixAxisController : RobotController
         }
 
         // Плавное движение цели (экспоненциальное сглаживание каждый кадр).
-        float rate = 1f - Mathf.Exp(-deltaTime * Mathf.Max(1f, (1f - positionSmoothing) * 40f) * maxSpeed);
+        float speedScale = Mathf.Max(0.05f, maxSpeed) * Mathf.Max(0.05f, movementSpeedScale);
+        float rate = 1f - Mathf.Exp(-deltaTime * Mathf.Max(1f, (1f - positionSmoothing) * 40f) * speedScale);
         smoothedTargetPosition = Vector3.Lerp(smoothedTargetPosition, targetPosition, rate);
         if (Vector3.Distance(smoothedTargetPosition, targetPosition) < 0.0005f)
             smoothedTargetPosition = targetPosition;

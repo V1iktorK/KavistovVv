@@ -127,8 +127,10 @@ public class SCARAController : RobotController
         Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : resolvedBase.up;
         Vector3 basePos = resolvedBase.position;
         float settingsSpeed = SettingsData.Instance != null ? SettingsData.Instance.robotSpeed : 1f;
+        float speedScale = Mathf.Max(0.05f, maxSpeed) * Mathf.Max(0.05f, movementSpeedScale) *
+                           Mathf.Max(0.05f, settingsSpeed);
         // Плавность: экспоненциальный шаг к аналитическому решению.
-        float step = 1f - Mathf.Exp(-deltaTime * Mathf.Max(1f, maxSpeed * settingsSpeed * 5f));
+        float step = 1f - Mathf.Exp(-deltaTime * speedScale * 5f);
         step = Mathf.Clamp01(step);
 
         // Планарная часть: приводим проекцию точки z_5 к проекции цели.
@@ -151,7 +153,7 @@ public class SCARAController : RobotController
         Transform zParent = resolvedJoint3.parent;
         if (zParent != null)
         {
-            float zStep = 1f - Mathf.Exp(-deltaTime * Mathf.Max(1f, maxSpeed * settingsSpeed * 6f));
+            float zStep = 1f - Mathf.Exp(-deltaTime * speedScale * 6f);
             resolvedJoint3.localPosition = Vector3.Lerp(
                 resolvedJoint3.localPosition,
                 zParent.InverseTransformPoint(desiredZPosition),
@@ -225,8 +227,15 @@ public class SCARAController : RobotController
     }
 
     /// <summary>
-    /// Вычисляет максимальное опускание z_5 из геометрии: верх меша z_5 («пимпочка»)
-    /// не должен входить в корпус J2_4. Ограничение считается по вертикальной оси.
+    /// Вычисляет ход z_5 из геометрии (замер вершин мешей):
+    ///   * z_5 (LS10-B702S_z_5): стержень Ø≈40 мм (секция 1.145–1.545) + узкий
+    ///     хвостовик Ø≈10 мм снизу; в J2_4 отверстие под стержень Ø≈44 мм
+    ///     (узкая часть 1.43–1.45).
+    ///   * ВНИЗ: «кончик» (низ стержня) может опускаться до уровня столешницы,
+    ///     на которой стоит робот (низ z_5 ≈ уровень базы); верхняя часть при
+    ///     этом уходит в отверстие корпуса J2_4 — это нормально (отверстие шире).
+    ///   * ВВЕРХ: низ стержня не должен прятаться в корпусе J2_4 (ход ограничен
+    ///     нижней плоскостью корпуса).
     /// </summary>
     private void ApplyZTravelFromGeometry()
     {
@@ -245,19 +254,28 @@ public class SCARAController : RobotController
         Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : Vector3.up;
         Vector3 basePos = baseTransform != null ? baseTransform.position : transform.position;
 
+        float rodBottom = Vector3.Dot(rod.bounds.min - basePos, axis); // низ стержня над базой
         float rodTop = Vector3.Dot(rod.bounds.max - basePos, axis);
-        float roof = Vector3.Dot(housing.bounds.max - basePos, axis);
-        float clearance = rodTop - roof; // зазор «пимпочки» над крышкой в стартовой позе
+        float housingBottom = Vector3.Dot(housing.bounds.min - basePos, axis);
+        float housingRoof = Vector3.Dot(housing.bounds.max - basePos, axis);
 
-        if (clearance < 0.01f) return; // уже упирается — не трогаем
-        float maxDown = Mathf.Clamp(clearance - 0.006f, 0.02f, 0.25f);
+        // ВНИЗ: низ стержня опускается до уровня базы (столешницы).
+        float maxDown = Mathf.Max(0.02f, rodBottom - 0.002f); // 1.127-база(0.147 н.б.)≈…
         float physicalMin = -maxDown;
         if (Mathf.Abs(ZMin - physicalMin) > 0.002f)
         {
-            Debug.Log("[SCARA] Ход Z вниз по геометрии: было " + ZMin +
-                      ", стало " + physicalMin.ToString("0.000") +
-                      " (пимпочка упирается в крышку J2_4)");
+            Debug.Log("[SCARA] Ход Z вниз: " + ZMin + " -> " + physicalMin.ToString("0.000") +
+                      " (низ z_5 до столешницы; верх уходит в отверстие J2_4, оно шире стержня)");
             ZMin = physicalMin;
+        }
+
+        // ВВЕРХ: низ стержня упирается в нижнюю плоскость корпуса J2_4.
+        float maxUp = Mathf.Clamp(housingBottom - rodBottom - 0.005f, 0.01f, 0.2f);
+        if (Mathf.Abs(ZMax - maxUp) > 0.002f)
+        {
+            Debug.Log("[SCARA] Ход Z вверх: " + ZMax + " -> " + maxUp.ToString("0.000") +
+                      " (низ стержня не прячется в корпусе)");
+            ZMax = maxUp;
         }
     }
 

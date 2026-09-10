@@ -17,6 +17,7 @@ namespace KompasUI
         private SpawnKind activeKind = SpawnKind.None;
         private RectTransform chooserRoot;
         private System.Action<int> onRobotTypeChosen;
+        private RobotController phantomTemplate; // реальная модель-«фантом» для выбора направления
 
         public SpawnKind ActiveKind => activeKind;
 
@@ -113,6 +114,7 @@ namespace KompasUI
             if (kind == SpawnKind.None)
             {
                 HideRobotChooser();
+                phantomTemplate = null;
                 SetHint("");
                 DestroyPreview();
                 return;
@@ -134,6 +136,20 @@ namespace KompasUI
             RobotYaw = (RobotYaw + deltaDegrees) % 360f;
             if (RobotYaw < 0f) RobotYaw += 360f;
             ApplySnap();
+        }
+
+        /// <summary>Задать направление напрямую (уже кратно 90°).</summary>
+        public void SetRobotYaw(float degrees)
+        {
+            if (activeKind != SpawnKind.Robot) return;
+            RobotYaw = degrees % 360f;
+            if (RobotYaw < 0f) RobotYaw += 360f;
+        }
+
+        /// <summary>Реальная модель-«фантом» для предпросмотра (вместо стилизованной).</summary>
+        public void SetPhantomTemplate(RobotController template)
+        {
+            phantomTemplate = template;
         }
 
         private void ApplySnap()
@@ -180,25 +196,67 @@ namespace KompasUI
             }
             else if (kind == SpawnKind.Robot)
             {
-                // Тело робота
-                preview = new GameObject("Preview_Robot");
-                GameObject body = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                body.transform.SetParent(preview.transform, false);
-                body.transform.localPosition = Vector3.up * 0.4f;
-                body.transform.localScale = new Vector3(0.4f, 0.4f, 0.4f);
-                // «Нос» — направление робота
-                GameObject nose = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                nose.transform.SetParent(preview.transform, false);
-                nose.transform.localPosition = new Vector3(0f, 0.4f, 0.75f);
-                nose.transform.localScale = new Vector3(0.18f, 0.18f, 0.6f);
+                if (phantomTemplate != null)
+                {
+                    // «Фантом» = копия настоящей модели (выбор направления по реальным габаритам).
+                    GameObject ghost = Object.Instantiate(phantomTemplate.gameObject);
+                    ghost.name = "Phantom_Robot";
+                    preview = ghost;
+
+                    // Гасим всю «живую» логику копии и коллайдеры.
+                    foreach (MonoBehaviour mb in ghost.GetComponentsInChildren<MonoBehaviour>(true))
+                    {
+                        if (mb == null) continue;
+                        mb.enabled = false;
+                    }
+                    foreach (Collider c in ghost.GetComponentsInChildren<Collider>(true))
+                    {
+                        Object.Destroy(c);
+                    }
+                }
+                else
+                {
+                    // Тело робота
+                    preview = new GameObject("Preview_Robot");
+                    GameObject body = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                    body.transform.SetParent(preview.transform, false);
+                    body.transform.localPosition = Vector3.up * 0.4f;
+                    body.transform.localScale = new Vector3(0.4f, 0.4f, 0.4f);
+                    // «Нос» — направление робота
+                    GameObject nose = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    nose.transform.SetParent(preview.transform, false);
+                    nose.transform.localPosition = new Vector3(0f, 0.4f, 0.75f);
+                    nose.transform.localScale = new Vector3(0.18f, 0.18f, 0.6f);
+                }
             }
 
             if (preview == null) return;
-            foreach (Renderer r in preview.GetComponentsInChildren<Renderer>())
+            if (kind == SpawnKind.Robot && phantomTemplate != null)
             {
-                r.material = new Material(Shader.Find("Sprites/Default"));
+                // Фантом из реальной модели: свои материалы, но с зелёным «призрачным» тоном.
+                foreach (Renderer r in preview.GetComponentsInChildren<Renderer>())
+                {
+                    Material m = r.material;
+                    if (m != null && m.HasProperty("_BaseColor"))
+                    {
+                        Color c = m.GetColor("_BaseColor");
+                        m.SetColor("_BaseColor", new Color(
+                            Mathf.Min(1f, c.r * 0.75f),
+                            Mathf.Min(1f, c.g * 1.2f),
+                            Mathf.Min(1f, c.b * 0.8f),
+                            c.a));
+                    }
+                }
+                previewRenderer = preview.GetComponentInChildren<Renderer>();
             }
-            previewRenderer = preview.GetComponentInChildren<Renderer>();
+            else
+            {
+                foreach (Renderer r in preview.GetComponentsInChildren<Renderer>())
+                {
+                    r.material = new Material(Shader.Find("Sprites/Default"));
+                }
+                previewRenderer = preview.GetComponentInChildren<Renderer>();
+            }
         }
 
         public void DestroyPreview()
