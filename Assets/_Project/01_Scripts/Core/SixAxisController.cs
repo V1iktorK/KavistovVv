@@ -62,6 +62,9 @@ public class SixAxisController : RobotController
     private bool smoothingInitialized;
     private bool selfCollisionSetup;
     private bool jointLimitsInitialized;
+    // TCP-прокси: у CAD-мешей пивот часто в начале координат модели, поэтому
+    // реальная точка инструмента берётся как центр меша фланца.
+    private Transform tcpProxy;
     private bool refsReported;
     private bool meshesFixed;
     private readonly Quaternion[] rollbackPose = new Quaternion[6];
@@ -128,6 +131,18 @@ public class SixAxisController : RobotController
             tcp = endEffector;
         }
 
+        // Пивот меша фланца может быть в начале координат модели (кривой FBX) —
+        // тогда IK «тянет» робота к точке у основания. Делаем TCP-прокси на кончике.
+        if (tcpProxy == null && endEffector != null)
+        {
+            tcpProxy = CreateTcpProxy(endEffector);
+            if (tcpProxy != null)
+            {
+                tcp = tcpProxy;
+                Debug.Log("[SixAxis] TCP выставлен на кончик инструмента ('" + tcpProxy.name + "')");
+            }
+        }
+
         // --- base: должна быть ПРЕДКОМ endEffector, иначе IK-цепь не строится ---
         if (baseTransform == null)
         {
@@ -164,6 +179,33 @@ public class SixAxisController : RobotController
             InitializeJointLimits();
             jointLimitsInitialized = true;
         }
+    }
+
+    /// <summary>
+    /// Создаёт TCP-прокси на кончике инструмента: если пивот меша фланца далеко
+    /// от его геометрии (типично для CAD-экспорта «всё в начале координат»),
+    /// возвращает пустой дочерний объект в центре меша. Иначе — null.
+    /// </summary>
+    private static Transform CreateTcpProxy(Transform ee)
+    {
+        if (ee == null) return null;
+        Renderer r = ee.GetComponent<Renderer>();
+        if (r == null) r = ee.GetComponentInChildren<Renderer>(true);
+        if (r == null) return null;
+
+        Vector3 tip = r.bounds.center;
+        if ((tip - ee.position).sqrMagnitude < 0.0025f) return null; // пивот уже на геометрии
+
+        GameObject go = new GameObject("TCP");
+        go.transform.SetParent(ee, false);
+        go.transform.position = tip;
+        return go.transform;
+    }
+
+    /// <summary>Точка, которую ведёт IK (TCP-прокси либо сам фланец).</summary>
+    private Transform IkTip
+    {
+        get { return tcpProxy != null ? tcpProxy : endEffector; }
     }
 
     /// <summary>Ищет «настоящую» ось AxisN (приоритет — точное имя, не меш AxisN_2).</summary>
@@ -560,8 +602,9 @@ public class SixAxisController : RobotController
         int iterations = Mathf.Max(1, Mathf.RoundToInt(ikIterations * Mathf.Max(0.25f, settingsSpeed)));
         iterations = Mathf.Min(iterations, 40);
 
+        Transform tip = IkTip;
         bool reached = DHInverse.SolveCCD(
-            jointTransforms, jointAxesLocal, endEffector,
+            jointTransforms, jointAxesLocal, tip,
             smoothedTargetPosition, iterations, ikTolerance);
 
         // Визуальная метка цели (legacy IKTarget), если есть.
@@ -571,7 +614,8 @@ public class SixAxisController : RobotController
         if (enableSelfCollisionGuard)
             ResolveSelfCollision(deltaTime, rollbackPose, n);
 
-        _lastReached = reached || Vector3.Distance(endEffector.position, targetPosition) <= ikTolerance;
+        _lastReached = reached || (tip != null &&
+            Vector3.Distance(tip.position, targetPosition) <= ikTolerance);
     }
 
     private bool _lastReached;

@@ -458,7 +458,7 @@ public class FreeFlyCameraController : MonoBehaviour
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
-            KompasUI.KompasUIManager.SetUiVisible(false); // клик по миру = телеоперация
+            // UI НЕ скрываем: панели пропадают только по Caps Lock.
             justCaptured = true;
             primaryButtonWasPressed = true; // этот клик не считаем телеоперацией
         }

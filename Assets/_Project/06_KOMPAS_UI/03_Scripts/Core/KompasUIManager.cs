@@ -47,9 +47,11 @@ namespace KompasUI
         [Tooltip("Роботы и столы отражают свет сильнее (ярче/гладче), чем ангар/пол — без новых источников")]
         public bool enableLightBoost = true;
         [Tooltip("Множитель albedo (базовый цвет) роботов/столов")]
-        public float lightBoostAlbedo = 1.25f;
+        public float lightBoostAlbedo = 1.35f;
         [Tooltip("Добавка к smoothness роботов/столов")]
-        public float lightBoostSmoothness = 0.08f;
+        public float lightBoostSmoothness = 0.12f;
+        [Tooltip("Собственная эмиссия (0..1 от albedo): объект «светится» сильнее, источники не добавляются")]
+        public float lightBoostEmissive = 0.35f;
 
         private Canvas canvas;
         private RectTransform canvasRect;
@@ -193,6 +195,16 @@ namespace KompasUI
                 }
                 if (m.HasProperty("_Smoothness"))
                     m.SetFloat("_Smoothness", Mathf.Min(0.95f, m.GetFloat("_Smoothness") + lightBoostSmoothness));
+
+                // Лёгкая собственная «отдача» света (эмиссия) — объект выглядит ярче
+                // и «отражает» сильнее без добавления источников света.
+                if (m.HasProperty("_EmissiveColor"))
+                {
+                    Color c = m.HasProperty("_BaseColor") ? m.GetColor("_BaseColor") : Color.white;
+                    float k = Mathf.Clamp01(lightBoostEmissive);
+                    m.SetColor("_EmissiveColor", new Color(c.r * k, c.g * k, c.b * k, 1f));
+                    m.EnableKeyword("_EMISSION");
+                }
             }
         }
 
