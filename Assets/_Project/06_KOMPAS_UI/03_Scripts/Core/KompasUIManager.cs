@@ -89,6 +89,19 @@ namespace KompasUI
             Instance.SetVisibleInternal(visible);
         }
 
+        // Статус планирования (перекрывает статус прицела на несколько секунд).
+        private static string planStatusText = "";
+        private static Color planStatusColor = Color.white;
+        private static float planStatusTime = -999f;
+
+        /// <summary>Сообщение от планировщика/метрик (слева внизу).</summary>
+        public static void SetPlanStatus(string text, Color color)
+        {
+            planStatusText = text;
+            planStatusColor = color;
+            planStatusTime = Time.realtimeSinceStartup;
+        }
+
         private void SetVisibleInternal(bool visible)
         {
             uiVisible = visible;
@@ -456,6 +469,14 @@ namespace KompasUI
         private void UpdateAimStatus()
         {
             if (statusBar == null) return;
+
+            // Сообщение планировщика/метрик важнее статуса прицела (3 с).
+            if (Time.realtimeSinceStartup - planStatusTime < 3f)
+            {
+                statusBar.SetAimStatus(planStatusText, planStatusColor);
+                return;
+            }
+
             if (aimIndicator == null)
             {
                 Camera cam = MainCamera;

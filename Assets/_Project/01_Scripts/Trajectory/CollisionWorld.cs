@@ -10,6 +10,16 @@ namespace TrajectoryCore
         public Vector3 b;
         public float r;
         public string name;
+        public bool support;   // опора робота (стол, на котором он стоит) — не считается столкновением
+    }
+
+    /// <summary>Осевой бокс препятствия (столешницы, плиты, ящики).</summary>
+    public struct ObstacleBox
+    {
+        public Vector3 center;
+        public Vector3 half;
+        public string name;
+        public bool support;
     }
 
     /// <summary>
@@ -23,18 +33,22 @@ namespace TrajectoryCore
     public class CollisionWorld
     {
         public readonly List<ObstacleCapsule> Capsules = new List<ObstacleCapsule>();
+        public readonly List<ObstacleBox> Boxes = new List<ObstacleBox>();
         public float FloorY = float.NegativeInfinity;
         public uint Version { get; private set; }
 
         private const float MaxObjectSize = 6f;   // крупнее — считаем фоном (ангар/стены)
         private const float MinObjectSize = 0.02f;
 
-        /// <summary>Пересобрать мир (стробоскопически: раз в N кадров или по изменению сцены).</summary>
+        /// <summary>Пересобрать мир. basePos — позиция базы робота (для определения опоры).</summary>
         public void Rebuild(RobotController skipRobot, float linkRadius = 0.06f)
         {
             Capsules.Clear();
+            Boxes.Clear();
             FloorY = float.NegativeInfinity;
             Version++;
+
+            Vector3 basePos = skipRobot != null ? skipRobot.transform.position : Vector3.zero;
 
             // 1. Статика сцены.
             Renderer[] renderers = Object.FindObjectsByType<Renderer>(FindObjectsInactive.Exclude);
@@ -43,7 +57,9 @@ namespace TrajectoryCore
                 if (r == null) continue;
                 string n = r.gameObject.name;
                 if (n.Contains("Phantom") || n.Contains("Preview") || n.Contains("Laser") ||
-                    n.Contains("IlyichLamp") || n.Contains("AimMarker") || n.Contains("TCP"))
+                    n.Contains("IlyichLamp") || n.Contains("AimMarker") || n.Contains("TCP") ||
+                    n.Contains("GhostRunner") || n.Contains("GhostWorstClearance") ||
+                    n.Contains("GhostTrajectory"))
                     continue;
                 if (r.GetComponentInParent<RobotController>() != null) continue; // роботы отдельно
 
@@ -58,7 +74,30 @@ namespace TrajectoryCore
                     continue; // стены/потолок ангара игнорируем
                 }
 
-                Capsules.Add(MakeCapsule(b, n));
+                // Плиты/столешницы (одна сторона много меньше двух других) — бокс;
+                // вытянутые тела — капсула.
+                float min = Mathf.Min(s.x, Mathf.Min(s.y, s.z));
+                float max = Mathf.Max(s.x, Mathf.Max(s.y, s.z));
+                bool slab = min < 0.35f * max;
+                if (slab)
+                {
+                    bool support = b.max.y <= basePos.y + 0.03f && b.max.y >= basePos.y - 0.4f &&
+                                   Mathf.Abs(b.center.x - basePos.x) <= b.extents.x + 0.25f &&
+                                   Mathf.Abs(b.center.z - basePos.z) <= b.extents.z + 0.25f;
+                    Boxes.Add(new ObstacleBox
+                    {
+                        center = b.center,
+                        half = b.extents,
+                        name = n,
+                        support = support
+                    });
+                }
+                else
+                {
+                    ObstacleCapsule c = MakeCapsule(b, n);
+                    c.support = false;
+                    Capsules.Add(c);
+                }
             }
 
             // 2. Другие роботы — цепочки по суставам.
@@ -120,12 +159,20 @@ namespace TrajectoryCore
             }
         }
 
-        /// <summary>Минимальное расстояние от точки до мира (пол + капсулы).</summary>
+        /// <summary>Минимальное расстояние от точки до мира (пол + капсулы + боксы).</summary>
         public float DistanceToPoint(Vector3 p)
         {
             float best = FloorY > float.NegativeInfinity ? Mathf.Max(0f, p.y - FloorY) : float.MaxValue;
             foreach (ObstacleCapsule c in Capsules)
+            {
+                if (c.support) continue;
                 best = Mathf.Min(best, DistancePointSegment(p, c.a, c.b) - c.r);
+            }
+            foreach (ObstacleBox b in Boxes)
+            {
+                if (b.support) continue;
+                best = Mathf.Min(best, PointBoxDistance(p, b));
+            }
             return best;
         }
 
@@ -139,14 +186,51 @@ namespace TrajectoryCore
                 for (int i = 0; i + 1 < nodes.Count; i++)
                     best = Mathf.Min(best, Mathf.Min(nodes[i].y, nodes[i + 1].y) - FloorY - linkRadius);
 
-            for (int i = 0; i + 1 < nodes.Count; i++)
+            // первое звено (база) крепится к опоре — его столкновения считаются нормой
+            int firstSegment = nodes.Count > 2 ? 1 : 0;
+
+            for (int i = firstSegment; i + 1 < nodes.Count; i++)
             {
                 for (int k = 0; k < Capsules.Count; k++)
                 {
                     ObstacleCapsule c = Capsules[k];
+                    if (c.support) continue;
                     float d = SegmentSegmentDistance(nodes[i], nodes[i + 1], c.a, c.b) - linkRadius - c.r;
                     if (d < best) best = d;
                 }
+                for (int k = 0; k < Boxes.Count; k++)
+                {
+                    ObstacleBox bx = Boxes[k];
+                    if (bx.support) continue;
+                    float d = SegmentBoxDistance(nodes[i], nodes[i + 1], bx) - linkRadius;
+                    if (d < best) best = d;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>Точное расстояние точка–осевой бокс.</summary>
+        public static float PointBoxDistance(Vector3 p, ObstacleBox b)
+        {
+            Vector3 d = new Vector3(
+                Mathf.Abs(p.x - b.center.x) - b.half.x,
+                Mathf.Abs(p.y - b.center.y) - b.half.y,
+                Mathf.Abs(p.z - b.center.z) - b.half.z);
+            Vector3 outside = new Vector3(Mathf.Max(d.x, 0f), Mathf.Max(d.y, 0f), Mathf.Max(d.z, 0f));
+            float outsideDist = outside.magnitude;
+            float insideDist = Mathf.Min(Mathf.Max(d.x, Mathf.Max(d.y, d.z)), 0f);
+            return outsideDist + insideDist;
+        }
+
+        /// <summary>Расстояние отрезок–бокс (сэмплирование отрезка).</summary>
+        public static float SegmentBoxDistance(Vector3 a, Vector3 b, ObstacleBox box)
+        {
+            const int samples = 7;
+            float best = float.MaxValue;
+            for (int i = 0; i <= samples; i++)
+            {
+                Vector3 p = Vector3.Lerp(a, b, (float)i / samples);
+                best = Mathf.Min(best, PointBoxDistance(p, box));
             }
             return best;
         }

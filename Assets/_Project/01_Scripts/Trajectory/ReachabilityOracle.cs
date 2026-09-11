@@ -67,19 +67,30 @@ namespace TrajectoryCore
 
         private void CacheScaraGeometry()
         {
-            Transform j1 = scara.joint1, j2 = scara.joint2;
-            if (j1 == null || j2 == null) return;
+            Transform j1 = scara.joint1, j2 = scara.joint2, j3 = scara.joint3;
+            if (j1 == null || j2 == null || j3 == null) return;
+            if (scara.baseTransform == null)
+            {
+                foreach (Transform t in scara.GetComponentsInChildren<Transform>(true))
+                    if (t.name.StartsWith("LS10-B702S_base")) { scara.baseTransform = t; break; }
+            }
             basePos = scara.baseTransform != null ? scara.baseTransform.position : j1.position;
             baseUp = scara.baseTransform != null ? scara.baseTransform.up : Vector3.up;
-            baseY = Vector3.Dot(j1.position, baseUp);
+            // Плоское звено считаем от J1 (плечо), длины: L1 = J1→J2, L2 = J2→z_5.
             Vector3 p1 = Vector3.ProjectOnPlane(j1.position - basePos, baseUp);
             Vector3 p2 = Vector3.ProjectOnPlane(j2.position - basePos, baseUp);
-            a1 = p1.magnitude;
-            a2 = Vector3.Distance(p1, p2);
-            initialHeight = Vector3.Dot(j2.position - basePos, baseUp);
+            Vector3 p3 = Vector3.ProjectOnPlane(j3.position - basePos, baseUp);
+            a1 = Vector3.Distance(p1, p2);
+            a2 = Vector3.Distance(p2, p3);
+            sRef1 = (p2 - p1).normalized;
+            sRef2 = (p3 - p2).normalized;
+            initialHeight = Vector3.Dot(j3.position - basePos, baseUp);
             zMin = scara.ZMin;
             zMax = scara.ZMax;
         }
+
+        private Vector3 sRef1 = Vector3.forward;
+        private Vector3 sRef2 = Vector3.forward;
 
         /// <summary>Вердикт по точке прицела (мир).</summary>
         public ReachResult Query(Vector3 point)
@@ -143,7 +154,8 @@ namespace TrajectoryCore
                 return res;
             }
 
-            Vector3 toTarget = Vector3.ProjectOnPlane(point - basePos, baseUp);
+            Vector3 shoulder = j1.position;
+            Vector3 toTarget = Vector3.ProjectOnPlane(point - shoulder, baseUp);
             float r = toTarget.magnitude;
             float reachMax = a1 + a2 - 0.002f;
             float reachMin = Mathf.Abs(a1 - a2) + 0.002f;
@@ -151,49 +163,42 @@ namespace TrajectoryCore
             {
                 res.verdict = ReachVerdict.Unreachable;
                 res.reason = r > reachMax ? "вне вылета руки" : "ближе мертвой зоны";
-                res.tcp = basePos + toTarget.normalized * Mathf.Clamp(r, reachMin, reachMax);
+                res.tcp = shoulder + toTarget.normalized * Mathf.Clamp(r, reachMin, reachMax);
                 return res;
             }
 
-            // Ход Z: насколько цель ниже/выше допустимого положения стержня.
+            // Ход Z (стержень z_5 относительно базы).
             float targetHeight = Vector3.Dot(point - basePos, baseUp);
             float desired = Mathf.Clamp(targetHeight, initialHeight + zMin, initialHeight + zMax);
+            float zSlide = desired - initialHeight;
             float zError = targetHeight - desired;
 
-            // Поза: 2 ветви локтя (для проверки коллизий).
             float cosQ2 = Mathf.Clamp((r * r - a1 * a1 - a2 * a2) / (2f * a1 * a2), -1f, 1f);
-            float q2 = Mathf.Acos(cosQ2);
-            float baseAngle = Mathf.Atan2(toTarget.x, toTarget.z) * Mathf.Rad2Deg; // азимут цели (град, ось Z)
-            float phi1 = Mathf.Atan2(a2 * Mathf.Sin(q2), a1 + a2 * Mathf.Cos(q2)) * Mathf.Rad2Deg;
+            float q2Abs = Mathf.Acos(cosQ2) * Mathf.Rad2Deg;
+            float azimuth = Vector3.SignedAngle(sRef1, toTarget, baseUp);
 
             float bestClearance = float.NegativeInfinity;
             Vector3 bestTcp = point;
-            int branches = 0;
             for (int s = 0; s < 2; s++)
             {
-                float sign = s == 0 ? 1f : -1f;
-                float q2b = q2 * sign;
-                float q1 = baseAngle - Mathf.Atan2(a2 * Mathf.Sin(q2b), a1 + a2 * Mathf.Cos(q2b)) * Mathf.Rad2Deg;
-                _ = phi1;
+                float q2 = s == 0 ? q2Abs : -q2Abs;
+                float phi2 = Mathf.Atan2(a2 * Mathf.Sin(q2 * Mathf.Deg2Rad),
+                                          a1 + a2 * Mathf.Cos(q2 * Mathf.Deg2Rad)) * Mathf.Rad2Deg;
+                float q1 = azimuth - phi2;
 
-                Vector3 elbow = basePos + (Quaternion.AngleAxis(q1, baseUp) * Vector3.forward) * a1 +
-                                baseUp * (initialHeight - Vector3.Dot(j2.position - basePos, baseUp));
-                Vector3 wrist = elbow;
-                float wristR = Mathf.Sqrt(Mathf.Max(0f, a1 * a1 + a2 * a2 + 2f * a1 * a2 * Mathf.Cos(q2b * Mathf.Deg2Rad)));
-                Vector3 wristDir = Quaternion.AngleAxis(q1 + Mathf.Atan2(a2 * Mathf.Sin(q2b), a1 + a2 * Mathf.Cos(q2b)) * Mathf.Rad2Deg, baseUp) * Vector3.forward;
-                wrist = basePos + wristDir * wristR + baseUp * (initialHeight - Vector3.Dot(j2.position - basePos, baseUp));
-                wrist += baseUp * desired; // стержень в допущенном положении
+                Vector3 elbowDir = Quaternion.AngleAxis(q1, baseUp) * sRef1;
+                Vector3 wristDir = Quaternion.AngleAxis(q1 + phi2, baseUp) * sRef1;
+                Vector3 elbow = shoulder + elbowDir * a1;
+                Vector3 wrist = shoulder + wristDir * r + baseUp * zSlide;
 
-                var nodes = new List<Vector3> { j1.position, elbow, wrist };
+                var nodes = new List<Vector3> { shoulder, elbow, wrist };
                 float clearanceNow = world.MinDistanceChain(nodes, linkRadius);
                 if (clearanceNow > bestClearance)
                 {
                     bestClearance = clearanceNow;
                     bestTcp = wrist;
                 }
-                branches++;
             }
-            _ = branches;
 
             res.clearance = bestClearance;
             res.tcp = bestTcp;

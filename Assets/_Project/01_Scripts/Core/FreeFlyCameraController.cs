@@ -85,6 +85,7 @@ public class FreeFlyCameraController : MonoBehaviour
     private bool gamepadMove;
     private Light flashlight;
     private AimIndicator aimIndicator;
+    private TrajectoryPlannerController plannerController;
 
     // Точка прицеливания (куда смотрит оператор) — на поверхности.
     private Vector3 aimPoint;
@@ -268,6 +269,7 @@ public class FreeFlyCameraController : MonoBehaviour
 
         CreateFlashlight();
         aimIndicator = gameObject.AddComponent<AimIndicator>(); // оракул достижимости (E1/E5)
+        plannerController = gameObject.AddComponent<TrajectoryPlannerController>(); // планировщик (E2–E5)
 
         if (enableCameraCollision)
         {
@@ -549,6 +551,10 @@ public class FreeFlyCameraController : MonoBehaviour
         // Онлайн-вердикт по точке прицела (зелёный/жёлтый/красный маркер).
         if (aimIndicator != null)
             aimIndicator.UpdateAim(aimPoint, aimHitSurface);
+
+        // Планировщик траекторий (P — план, 1/2/3 — исполнить, F9 — автотест).
+        if (plannerController != null)
+            plannerController.UpdateAim(aimPoint, aimHitSurface);
 
         if (leftHandEnabled) DrawHandLaser(leftLaser, -1f, leftHandOffset, leftColor);
         else if (leftLaser != null) leftLaser.enabled = false;
