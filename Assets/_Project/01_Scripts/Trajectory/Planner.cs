@@ -28,6 +28,7 @@ namespace TrajectoryCore
     public class Planner
     {
         public float clearance = 0.02f;
+        public float selfClearance = 0.015f;   // запас между своими звеньями
         public int maxIterations = 2500;
         public double stepSizeDeg = 12.0;
         public float timeStep = 0.02f;      // шаг сэмплирования траектории
@@ -35,9 +36,12 @@ namespace TrajectoryCore
 
         // Веса скоринга
         public double wTime = 1.0, wLength = 0.6, wClearance = 2.0, wLimit = 0.5, wSigma = 0.5;
+        public double wPosture = 0.05;      // вклад стоимости позы (PostureSelector)
 
         private PoseValidator v;
         private CollisionWorld world;
+        private IkSolver ik;
+        private PostureSelector posture;
         private double[] ranges;
 
         public bool Ready { get; private set; }
@@ -56,6 +60,10 @@ namespace TrajectoryCore
                 double r = v.Upper[i] - v.Lower[i];
                 ranges[i] = r > 1e-6 ? r : 1.0;
             }
+            ik = new IkSolver();
+            ik.Init(v);
+            posture = new PostureSelector();
+            posture.Init(v);
         }
 
         /// <summary>Планирование до точки; возвращает до maxCandidates вариантов (отсортированы).</summary>
@@ -64,29 +72,50 @@ namespace TrajectoryCore
             var result = new List<PlannedTrajectory>();
             if (!Ready || start == null) return result;
 
-            // 1. Конфигурации цели: несколько IK-решений (разные сиды → разные ветви).
+            // 1. Конфигурации цели: сначала ВСЕ аналитические ветви IK (≤8), затем CCD-резерв.
             var goals = new List<double[]>();
-            for (int k = 0; k < 4; k++)
+            var goalTags = new List<string>();
+            List<IkSolution> branches = ik != null && ik.Ready
+                ? ik.SolveAll(goalPoint, start)
+                : new List<IkSolution>();
+
+            // Ранжируем ветви селектором позы (лимиты + home + сингулярность + непрерывность).
+            branches.Sort((a, b) => PostureCost(a, start).CompareTo(PostureCost(b, start)));
+            foreach (IkSolution s in branches)
             {
-                double[] s = (double[])start.Clone();
-                var rng = new System.Random(seed + k * 977);
-                for (int i = 0; i < v.Dof; i++)
-                {
-                    if (k == 0) continue; // первый — из текущей позы
-                    double span = ranges[i] * 0.25;
-                    s[i] += (rng.NextDouble() * 2.0 - 1.0) * span;
-                }
-                if (!v.WithinLimits(s)) continue;
-                if (v.SolveIk(goalPoint, s, out double[] qg, 120, 0.008f) && v.WithinLimits(qg))
-                {
-                    bool dup = false;
-                    foreach (double[] ex in goals)
-                    {
-                        if (ConfigDistance(ex, qg) < 0.02) { dup = true; break; }
-                    }
-                    if (!dup) goals.Add(qg);
-                }
+                if (!s.withinLimits) continue;
+                bool dup = false;
+                foreach (double[] ex in goals)
+                    if (ConfigDistance(ex, s.q) < 0.02) { dup = true; break; }
+                if (dup) continue;
+                goals.Add(s.q);
+                goalTags.Add(s.tag.ToString());
                 if (goals.Count >= maxCandidates + 1) break;
+            }
+            LastBranchInfo = goalTags.Count > 0 ? string.Join(" | ", goalTags.ToArray()) : "нет ветвей";
+
+            // CCD-резерв, если аналитика не дала решений (или робот SCARA).
+            if (goals.Count == 0)
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    double[] s = (double[])start.Clone();
+                    var rng = new System.Random(seed + k * 977);
+                    for (int i = 0; i < v.Dof; i++)
+                    {
+                        if (k == 0) continue;
+                        s[i] += (rng.NextDouble() * 2.0 - 1.0) * ranges[i] * 0.25;
+                    }
+                    if (!v.WithinLimits(s)) continue;
+                    if (v.SolveIk(goalPoint, s, out double[] qg, 120, 0.008f) && v.WithinLimits(qg))
+                    {
+                        bool dup = false;
+                        foreach (double[] ex in goals)
+                            if (ConfigDistance(ex, qg) < 0.02) { dup = true; break; }
+                        if (!dup) { goals.Add(qg); goalTags.Add("CCD"); }
+                    }
+                    if (goals.Count >= maxCandidates + 1) break;
+                }
             }
             if (goals.Count == 0)
             {
@@ -125,8 +154,18 @@ namespace TrajectoryCore
             double clearPenalty = t.MinClearance <= 0.001 ? 1000.0 : wClearance / t.MinClearance;
             double limitPenalty = t.LimitMargin <= 0.5 ? 500.0 : wLimit * (30.0 / t.LimitMargin);
             double sigmaPenalty = t.SigmaMin <= 1e-6 ? 200.0 : wSigma * (0.05 / t.SigmaMin);
-            return wTime * t.Time + wLength * t.Length + clearPenalty + limitPenalty + sigmaPenalty;
+            double posturePenalty = posture != null && posture.Ready && t.GoalQ != null
+                ? wPosture * posture.Cost(t.GoalQ, null) : 0.0;
+            return wTime * t.Time + wLength * t.Length + clearPenalty + limitPenalty +
+                   sigmaPenalty + posturePenalty;
         }
+
+        private double PostureCost(IkSolution s, double[] qPrev)
+        {
+            return posture != null && posture.Ready ? posture.Cost(s.q, qPrev) : 0.0;
+        }
+
+        public string LastBranchInfo { get; private set; } = "";
 
         private double ConfigDistance(double[] a, double[] b)
         {
@@ -141,7 +180,11 @@ namespace TrajectoryCore
 
         private bool Free(double[] q, out float clearanceOut)
         {
-            if (!v.WithinLimits(q)) { clearanceOut = -1f; return false; }
+            clearanceOut = -1f;
+            if (!v.WithinLimits(q)) return false;
+            // самоколлизия собственных звеньев
+            float self = v.SelfClearance(q, out _, out _);
+            if (self < selfClearance) { clearanceOut = self; return false; }
             clearanceOut = v.ClearanceAt(q, world, out _, out _);
             return clearanceOut >= clearance;
         }
@@ -242,9 +285,17 @@ namespace TrajectoryCore
             return path;
         }
 
+        /// <summary>
+        /// Проверка ребра с АДАПТИВНЫМ шагом: Δq ≤ δ / (2·max‖J‖∞), т.е. смещение
+        /// любой точки звена на шаге не превышает половины требуемого зазора —
+        /// это исключает «проскок» сквозь препятствие (дискретизация по расстоянию).
+        /// </summary>
         private bool SegmentFree(double[] a, double[] b)
         {
-            int steps = Mathf.Max(2, Mathf.CeilToInt((float)(ConfigDistance(a, b) / 0.03)));
+            float jn = v.MaxJacobianNorm(a);
+            double maxStepNorm = Mathf.Max(0.002f, clearance * 0.5f / Mathf.Max(1e-6f, jn));
+            int steps = Mathf.Max(2, Mathf.CeilToInt((float)(ConfigDistance(a, b) / maxStepNorm)));
+            steps = Mathf.Min(steps, 400);
             for (int s = 1; s < steps; s++)
             {
                 double k = (double)s / steps;
@@ -308,7 +359,8 @@ namespace TrajectoryCore
             {
                 if (i > 0) len += ConfigDistance(samples[i - 1], samples[i]);
                 float c = v.ClearanceAt(samples[i], world, out _, out _);
-                minClear = Mathf.Min(minClear, c);
+                float self = v.SelfClearance(samples[i], out _, out _);
+                minClear = Mathf.Min(minClear, Mathf.Min(c, self));
                 minLimit = Mathf.Min(minLimit, v.LimitMargin(samples[i]));
             }
             t2.Length = len;

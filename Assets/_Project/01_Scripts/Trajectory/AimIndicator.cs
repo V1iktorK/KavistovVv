@@ -20,14 +20,19 @@ public class AimIndicator : MonoBehaviour
 
     private readonly CollisionWorld world = new CollisionWorld();
     private readonly ReachabilityOracle oracle = new ReachabilityOracle();
+    private readonly PoseValidator validator = new PoseValidator();
+    private readonly IkSolver ik = new IkSolver();
+    private readonly PostureSelector posture = new PostureSelector();
     private GameObject marker;
     private Renderer markerRenderer;
     private Material markerMaterial;
     private float nextRebuild;
     private RobotController lastRobot;
+    private Vector3 lastSelectionPoint = new Vector3(9999f, 9999f, 9999f);
 
     public ReachResult Last { get; private set; }
     public bool HasResult { get; private set; }
+    public string LastBranch { get; private set; } = "";
 
     private void Awake()
     {
@@ -65,6 +70,9 @@ public class AimIndicator : MonoBehaviour
         {
             lastRobot = robot;
             oracle.Init(robot, world);
+            validator.Init(robot);
+            ik.Init(validator);
+            posture.Init(validator);
             world.Rebuild(robot, linkRadius);
             nextRebuild = 0f;
             HasResult = false;
@@ -103,6 +111,27 @@ public class AimIndicator : MonoBehaviour
             marker.SetActive(true);
             marker.transform.position = aimPoint;
             ApplyColor(Last.verdict);
+        }
+
+        // Выбор «удобной» ветви IK для живой телеоперации (posture locking):
+        // робот поедет в выбранную конфигурацию, а не в вывернутую.
+        if (lastRobot is SixAxisController six && ik.Ready && validator.Ready)
+        {
+            if ((aimPoint - lastSelectionPoint).sqrMagnitude > 0.0004f) // > 2 см
+            {
+                lastSelectionPoint = aimPoint;
+                double[] qNow = validator.CopyCurrent();
+                var branches = ik.SolveAll(aimPoint, qNow);
+                if (branches.Count > 0)
+                {
+                    IkSolution best = posture.Select(branches, qNow);
+                    if (best.q != null && best.withinLimits)
+                    {
+                        six.SetPreferredSeed(best.q);
+                        LastBranch = best.tag + " (ветвей " + branches.Count + ")";
+                    }
+                }
+            }
         }
     }
 

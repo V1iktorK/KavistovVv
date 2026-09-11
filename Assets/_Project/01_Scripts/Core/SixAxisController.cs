@@ -67,6 +67,32 @@ public class SixAxisController : RobotController
     private Transform tcpProxy;
     private bool refsReported;
     private bool meshesFixed;
+
+    // Предпочтительная ветвь IK (селектор позы): CCD стартует с неё, поэтому робот
+    // приходит в «удобную» конфигурацию, а не выворачивается.
+    private double[] preferredSeed;
+    private bool seedPending;
+
+    /// <summary>Задать предпочтительную конфигурацию (ветвь IK) для следующей цели.</summary>
+    public void SetPreferredSeed(double[] q)
+    {
+        if (q == null || jointTransforms == null || q.Length < jointTransforms.Length) return;
+        preferredSeed = (double[])q.Clone();
+        seedPending = true;
+    }
+
+    /// <summary>True, если задан непотреблённый сид (для диагностики).</summary>
+    public bool HasPendingSeed => seedPending;
+
+    private void ApplyPreferredSeed()
+    {
+        if (!seedPending || preferredSeed == null || jointTransforms == null) return;
+        seedPending = false;
+        EnsureAxisCache();
+        int n = Mathf.Min(jointTransforms.Length, preferredSeed.Length);
+        for (int i = 0; i < n; i++)
+            SetJointAngle(i, (float)preferredSeed[i]);
+    }
     private readonly Quaternion[] rollbackPose = new Quaternion[6];
 
     // Кэш DH-осей: q0 — «нулевая» поза сустава (при старте/первом решении),
@@ -597,6 +623,7 @@ public class SixAxisController : RobotController
             smoothedTargetPosition = targetPosition;
 
         SnapshotPose(rollbackPose, n);
+        ApplyPreferredSeed(); // сначала переводим робота в выбранную ветвь IK, затем CCD
 
         float settingsSpeed = SettingsData.Instance != null ? SettingsData.Instance.robotSpeed : 1f;
         int iterations = Mathf.Max(1, Mathf.RoundToInt(ikIterations * Mathf.Max(0.25f, settingsSpeed)));

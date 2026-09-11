@@ -347,6 +347,93 @@ namespace TrajectoryCore
             return p;
         }
 
+        /// <summary>
+        /// Самоколлизия звеньев (Проблема 2): минимальный зазор между несоседними
+        /// звеньями робота. Возвращает зазор (м, минус — пересечение) и индексы звеньев.
+        /// </summary>
+        public float SelfClearance(double[] q, out int linkA, out int linkB)
+        {
+            linkA = -1;
+            linkB = -1;
+            if (!Ready) return float.MaxValue;
+
+            Quaternion[] saved = Snapshot();
+            Vector3[] savedPos = null;
+            if (scara != null)
+            {
+                saved = new Quaternion[2];
+                savedPos = new Vector3[1];
+                saved[0] = sj1.localRotation; saved[1] = sj2.localRotation;
+                savedPos[0] = sj3.localPosition;
+            }
+
+            Apply(q);
+            Vector3[] nodes = ReadChain();
+            if (savedPos != null)
+            {
+                sj1.localRotation = saved[0];
+                sj2.localRotation = saved[1];
+                sj3.localPosition = savedPos[0];
+            }
+            Restore(saved);
+
+            float best = float.MaxValue;
+            int n = nodes.Length;
+            float rr = linkRadius * 2f;
+            for (int i = 0; i + 1 < n; i++)
+            {
+                Vector3 a0 = nodes[i], a1 = nodes[i + 1];
+                if ((a1 - a0).sqrMagnitude < 1e-8f) continue;      // совпавшие оси (запястье)
+                for (int j = i + 2; j + 1 < n; j++)
+                {
+                    Vector3 b0 = nodes[j], b1 = nodes[j + 1];
+                    if ((b1 - b0).sqrMagnitude < 1e-8f) continue;
+                    float d = CollisionWorld.SegmentSegmentDistance(a0, a1, b0, b1) - rr;
+                    if (d < best) { best = d; linkA = i; linkB = j; }
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Аналитический (численный) позиционный Якобиан 3×N в конфигурации q.
+        /// J_k = ∂p_tcp/∂q_k (конечные разности, шаг 0.25°; для призмы SCARA — метры).
+        /// </summary>
+        public void Jacobian(double[] q, double[][] jac, out Vector3 tcp)
+        {
+            tcp = TcpAt(q);
+            int n = Dof;
+            double h = 0.25 * Mathf.Deg2Rad;
+            var probe = (double[])q.Clone();
+            for (int k = 0; k < n; k++)
+            {
+                double save = probe[k];
+                probe[k] = save + h;
+                Vector3 plus = TcpAt(probe);
+                probe[k] = save - h;
+                Vector3 minus = TcpAt(probe);
+                probe[k] = save;
+                Vector3 dp = (plus - minus) / (float)(2.0 * h);
+                jac[0][k] = dp.x; jac[1][k] = dp.y; jac[2][k] = dp.z;
+            }
+        }
+
+        /// <summary>Максимальная норма строки Якобиана ‖∂p/∂q_k‖∞ — для адаптивного шага рёбер.</summary>
+        public float MaxJacobianNorm(double[] q)
+        {
+            if (!Ready) return 1f;
+            var jac = KinematicsJacobian.Allocate(Dof);
+            Jacobian(q, jac, out _);
+            float m = 1e-6f;
+            for (int k = 0; k < Dof; k++)
+            {
+                float norm = Mathf.Max(Mathf.Abs((float)jac[0][k]),
+                             Mathf.Max(Mathf.Abs((float)jac[1][k]), Mathf.Abs((float)jac[2][k])));
+                m = Mathf.Max(m, norm);
+            }
+            return m;
+        }
+
         public bool WithinLimits(double[] q, float marginDeg = 0f)        {
             for (int i = 0; i < Dof; i++)
             {
