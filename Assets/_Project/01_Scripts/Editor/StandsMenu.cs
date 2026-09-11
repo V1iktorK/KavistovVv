@@ -4,12 +4,17 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 
 /// <summary>
-/// Меню редактора: пересоздать сцену стендов прямо в MainScene
-/// (удалить старые столы/роботов, создать два стола и двух роботов).
+/// Инструменты сборки стендов (столы + роботы) в MainScene.
+///
+/// ВАЖНО: пункты меню Tools/KOMPAS отсюда УДАЛЕНЫ — столы и роботы теперь
+/// стоят в MainScene как обычные объекты сцены (см. Assets/_Project/00_Scenes/
+/// MainScene.unity) и не должны создаваться ни кнопкой, ни в рантайме.
+/// Класс оставлен как утилита: методы можно вызвать из своего кода/консоли,
+/// если потребуется пересобрать стенды вручную.
 /// </summary>
 public static class StandsMenu
 {
-    [MenuItem("Tools/KOMPAS/Пересоздать сцену: 2 стола + роботы")]
+    /// <summary>Пересобрать сцену: удалить старые столы/роботов и создать два стенда.</summary>
     public static void RebuildScene()
     {
         StandBuilder.RebuildStandaloneScene(0.98f);
@@ -21,7 +26,7 @@ public static class StandsMenu
         Debug.Log("[Stands] Сцена пересобрана: (0,0,-24) — 6-осевой, (0,0,-28) — SCARA");
     }
 
-    [MenuItem("Tools/KOMPAS/Разместить 2 стенда (без удаления старого)")]
+    /// <summary>Разместить два стенда, не удаляя существующие объекты.</summary>
     public static void PlaceStands()
     {
         StandBuilder.EnsureStands(0.98f);

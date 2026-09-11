@@ -31,8 +31,8 @@ public class TrajectoryFlowController : MonoBehaviour
     public float motionSpeed = 1f / 30f;       // 1 юнит за 30 секунд
     public bool slowMotionEnabled = true;
 
-    [Header("Стенды")]
-    public bool ensureStandsOnStart = true;
+    // Стенды (столы + роботы) теперь лежат прямо в MainScene — в рантайме
+    // ничего не создаётся (см. Assets/_Project/00_Scenes/MainScene.unity).
 
     private LaserManager lasers;
     private PhantomManager phantoms;
@@ -77,7 +77,6 @@ public class TrajectoryFlowController : MonoBehaviour
         lasers.UpdateRays(aimPoint, aimHit);
         if (!started)
         {
-            if (ensureStandsOnStart) StandBuilder.EnsureStands(0.98f);
             Rebind();
             started = true;
         }
