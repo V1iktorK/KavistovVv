@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace TrajectoryCore
@@ -16,7 +17,7 @@ namespace TrajectoryCore
         public static readonly Vector3 Stand1Pos = new Vector3(0f, 0f, -24f);
         public static readonly Vector3 Stand2Pos = new Vector3(0f, 0f, -28f);
 
-        /// <summary>Создать оба стенда, если их ещё нет (вызывается из меню редактора и при старте Play).</summary>
+        /// <summary>Создать оба стенда, если их ещё нет (идемпотентно).</summary>
         public static void EnsureStands(float tableTopHeight = 0.98f)
         {
             GameObject stand1 = FindByName(Stand1Name);
@@ -24,8 +25,61 @@ namespace TrajectoryCore
             GameObject stand2 = FindByName(Stand2Name);
             if (stand2 == null) stand2 = BuildTable(Stand2Name, Stand2Pos, tableTopHeight);
 
-            PlaceRobotOnStand(stand1, typeof(SixAxisController), "Робот_6ос_Стенд1");
-            PlaceRobotOnStand(stand2, typeof(SCARAController), "SCARA_Стенд2");
+            PlaceRobotOnStand(stand1, typeof(SixAxisController), Robot1CopyName);
+            PlaceRobotOnStand(stand2, typeof(SCARAController), Robot2CopyName);
+        }
+
+        public const string Robot1CopyName = "Робот_6ос_Стенд1";
+        public const string Robot2CopyName = "SCARA_Стенд2";
+
+        /// <summary>
+        /// Полное пересоздание сцены (для меню редактора): удалить старые столы/роботов
+        /// и создать только два стенда. Копии роботов делаются ДО удаления шаблонов.
+        /// </summary>
+        public static void RebuildStandaloneScene(float tableTopHeight = 0.98f)
+        {
+            // 1. Сначала создаём новое (копии берутся с существующих роботов-шаблонов).
+            EnsureStands(tableTopHeight);
+
+            // 2. Удаляем всё старое: прежние столы/стенды/роботов, кроме новых стендов.
+            var toDelete = new List<GameObject>();
+            foreach (Transform t in Object.FindObjectsByType<Transform>(FindObjectsInactive.Include))
+            {
+                if (t == null) continue;
+                GameObject go = t.gameObject;
+                if (go.name == Stand1Name || go.name == Stand2Name ||
+                    go.name == Robot1CopyName || go.name == Robot2CopyName) continue;
+                if (go.name == "Phantoms" || go.name.StartsWith("Траектория")) continue;
+                if (go.transform.parent != null &&
+                    (go.transform.parent.name == Stand1Name || go.transform.parent.name == Stand2Name)) continue;
+
+                bool isOldStand = go.name.StartsWith("Стенд_") || go.name.StartsWith("Стол_");
+                bool isOldRobot = go.GetComponent<RobotController>() != null;
+                bool isOldTable = go.GetComponent<KompasUI.RegisteredObject>() != null &&
+                                  (go.name.ToLowerInvariant().Contains("стол") ||
+                                   go.name.ToLowerInvariant().Contains("desk") ||
+                                   go.name.ToLowerInvariant().Contains("table"));
+                if (isOldStand || isOldRobot || isOldTable) toDelete.Add(go);
+            }
+            foreach (GameObject go in toDelete)
+                if (go != null) DestroyGo(go);
+
+            // 3. Убираем «сирот» (Кубы-столы от старого спавна).
+            foreach (Transform t in Object.FindObjectsByType<Transform>(FindObjectsInactive.Include))
+            {
+                if (t == null || t.parent == null) continue;
+                string n = t.name.ToLowerInvariant();
+                if (n.StartsWith("стол_") && t.GetComponent<MeshRenderer>() != null)
+                    DestroyGo(t.gameObject);
+            }
+        }
+
+        /// <summary>В редакторе Destroy отложен — нужен DestroyImmediate, иначе объекты остаются.</summary>
+        private static void DestroyGo(Object go)
+        {
+            if (go == null) return;
+            if (Application.isPlaying) Object.Destroy(go);
+            else Object.DestroyImmediate(go);
         }
 
         /// <summary>Стол: столешница + 4 ножки. Корень scale = (1,1,1), размеры заданы деталями.</summary>
@@ -104,6 +158,9 @@ namespace TrajectoryCore
             }
             return null;
         }
+
+        /// <summary>Шаблон робота (для редакторского инструмента).</summary>
+        public static RobotController TemplateFor(System.Type robotType) => FindTemplate(robotType);
 
         private static GameObject FindByName(string name)
         {

@@ -3,16 +3,14 @@ using UnityEngine;
 
 namespace TrajectoryCore
 {
-    /// <summary>Фазы сценария «два лазера» (красный — точка, зелёный — траектория/фантом).</summary>
-    public enum FlowPhase
+    /// <summary>Состояния сценария (по ТЗ): этапы 0–4.</summary>
+    public enum FlowState
     {
-        Idle,                 // точка не подтверждена — ничего не считаем
-        PointLocked,          // точка зафиксирована, кандидаты построены
-        TrajectoryHover,      // зелёный луч на «колбаске»
-        TrajectorySelected,   // траектория подтверждена → показаны фантомы
-        PhantomHover,         // зелёный луч на фантоме
-        PhantomSelected,      // фантом подтверждён
-        Executing             // робот едет
+        Idle,                // этап 0/1: точка не подтверждена — ничего не считаем и не двигаем
+        PointSelected,       // точка подтверждена, кандидаты ещё считаются (тайм-слайсы)
+        TrajectoriesShown,   // этап 2: показаны оранжевые траектории, ждём зелёный выбор
+        PhantomsMoving,      // этап 3: фантомы едут из позы робота в свои конечные позы
+        RobotMoving          // этап 4: реальный робот едет (нажатия игнорируются)
     }
 
     /// <summary>Кандидат-траектория: геометрия для «колбаски», метрики и стоимость.</summary>
@@ -48,7 +46,7 @@ namespace TrajectoryCore
     /// <summary>Текущее состояние выбора (единая точка правды для UI и логики).</summary>
     public class SelectionState
     {
-        public FlowPhase phase = FlowPhase.Idle;
+        public FlowState phase = FlowState.Idle;
         public Vector3 point;                 // зафиксированная точка
         public bool hasPoint;
         public Vector3 aimAtLock;             // прицел в момент фиксации точки
@@ -73,7 +71,7 @@ namespace TrajectoryCore
             ResetTrajectorySelection();
             candidates.Clear();
             hasPoint = false;
-            phase = FlowPhase.Idle;
+            phase = FlowState.Idle;
         }
     }
 

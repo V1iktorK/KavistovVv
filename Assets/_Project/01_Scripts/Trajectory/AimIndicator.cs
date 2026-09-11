@@ -144,18 +144,17 @@ public class AimIndicator : MonoBehaviour
     private void ApplyColor(ReachVerdict verdict)
     {
         if (markerMaterial == null) return;
-        Color c = verdict == ReachVerdict.Safe ? new Color(0.15f, 1f, 0.3f)
-            : verdict == ReachVerdict.Marginal ? new Color(1f, 0.85f, 0.1f)
-            : new Color(1f, 0.15f, 0.1f);
-
-        if (markerMaterial.HasProperty("_BaseColor")) markerMaterial.SetColor("_BaseColor", c);
-        if (markerMaterial.HasProperty("_EmissiveColor"))
-        {
-            markerMaterial.SetColor("_EmissiveColor", c * markerEmission);   // ярче линии лазера
-            markerMaterial.EnableKeyword("_EMISSION");
-        }
-        if (markerMaterial.HasProperty("_Color")) markerMaterial.SetColor("_Color", c);
+        // Ядовитая неоновая палитра: кислотно-зелёный / ядовито-оранжевый / неон-маджента.
+        Color c = verdict == ReachVerdict.Safe ? new Color(0.45f, 1f, 0.02f)
+            : verdict == ReachVerdict.Marginal ? new Color(1f, 0.72f, 0f)
+            : new Color(1f, 0.03f, 0.42f);
+        GhostMaterial.MakeNeon(markerMaterial, c, markerEmission);
+        markerPulse += Time.deltaTime * 6f;
+        float k = 1f + 0.18f * Mathf.Sin(markerPulse);
+        if (marker != null) marker.transform.localScale = Vector3.one * (markerSize * k);
     }
+
+    private float markerPulse;
 
     private static RobotController FindActiveRobot()
     {

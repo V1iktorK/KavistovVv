@@ -352,8 +352,8 @@ public class FreeFlyCameraController : MonoBehaviour
 
         lr.positionCount = 2;
         lr.useWorldSpace = true;
-        lr.startWidth = 0.018f;
-        lr.endWidth = 0.006f;
+        lr.startWidth = 0.010f;   // тонкий, но заметный
+        lr.endWidth = 0.004f;
         lr.enabled = false;
 
         Shader shader = Shader.Find("Sprites/Default");
@@ -584,7 +584,8 @@ public class FreeFlyCameraController : MonoBehaviour
                 (Gamepad.current != null && Gamepad.current.rightTrigger.wasPressedThisFrame) ||
                 (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame);
             bool cancel = Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
-            flowController.UpdateAim(aimPoint, aimHitSurface, redConfirm, greenConfirm, cancel);
+            flowController.UpdateAim(aimPoint, aimHitSurface, redConfirm, greenConfirm, cancel,
+                leftHandEnabled, rightHandEnabled);
         }
 
         if (leftHandEnabled) DrawHandLaser(leftLaser, -1f, leftHandOffset, leftColor);
