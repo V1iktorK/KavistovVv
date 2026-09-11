@@ -69,6 +69,7 @@ namespace KompasUI
         private ProjectNode selectedNode;
         private RobotController lastActiveRobot;
         private GameObject workLamp;
+        private AimIndicator aimIndicator;
 
         // Размещение роботов.
         private RobotController pendingRobotTemplate;   // выбранный тип (SCARA/6-осевой)
@@ -448,6 +449,35 @@ namespace KompasUI
             HandleRobotChooserKeys();
             HandlePlacementInput();
             TrackActiveRobotForProperties();
+            UpdateAimStatus();
+        }
+
+        /// <summary>Статус прицела слева внизу: достижимость/запас/причина (от AimIndicator).</summary>
+        private void UpdateAimStatus()
+        {
+            if (statusBar == null) return;
+            if (aimIndicator == null)
+            {
+                Camera cam = MainCamera;
+                if (cam != null) aimIndicator = cam.GetComponent<AimIndicator>();
+                if (aimIndicator == null) return;
+            }
+
+            if (!aimIndicator.HasResult)
+            {
+                statusBar.SetAimStatus("", KompasTheme.TextDim);
+                return;
+            }
+
+            TrajectoryCore.ReachResult r = aimIndicator.Last;
+            string label = r.verdict == TrajectoryCore.ReachVerdict.Safe ? "ДОСТИЖИМО"
+                : r.verdict == TrajectoryCore.ReachVerdict.Marginal ? "ПРЕДЕЛЬНО"
+                : r.verdict == TrajectoryCore.ReachVerdict.Collision ? "СТОЛКНОВЕНИЕ"
+                : "НЕДОСТИЖИМО";
+            Color c = r.verdict == TrajectoryCore.ReachVerdict.Safe ? new Color(0.3f, 1f, 0.4f)
+                : r.verdict == TrajectoryCore.ReachVerdict.Marginal ? new Color(1f, 0.85f, 0.2f)
+                : new Color(1f, 0.35f, 0.3f);
+            statusBar.SetAimStatus("Прицел: " + label + " — " + r.reason, c);
         }
 
         /// <summary>Выбор типа робота клавишами 1/2, пока открыт выборщик; Esc — отмена.</summary>

@@ -9,6 +9,8 @@ namespace KompasUI
     /// </summary>
     public class StatusBar : MonoBehaviour
     {
+        private Text statusText;
+
         public void Build(RectTransform parent)
         {
             Image panel = KompasTheme.CreatePanel(parent, "StatusBar", KompasTheme.PanelHeader);
@@ -18,6 +20,16 @@ namespace KompasUI
             pr.pivot = new Vector2(0.5f, 0f);
             pr.sizeDelta = new Vector2(0f, 30f);
             pr.anchoredPosition = new Vector2(0f, 0f);
+
+            // Слева — онлайн-статус прицела (достижимость/запас).
+            statusText = KompasTheme.CreateText(panel.rectTransform, "AimStatus", "",
+                KompasTheme.FontSizeSmall, TextAnchor.MiddleLeft, KompasTheme.TextDim);
+            RectTransform sr = statusText.rectTransform;
+            sr.anchorMin = new Vector2(0f, 0f);
+            sr.anchorMax = new Vector2(0f, 1f);
+            sr.pivot = new Vector2(0f, 0.5f);
+            sr.anchoredPosition = new Vector2(12f, 0f);
+            sr.sizeDelta = new Vector2(700f, 0f);
 
             // Центральный блок ссылок (примерно 2px «выше нижнего края» — сам бар у края).
             GameObject centerGo = new GameObject("Links", typeof(HorizontalLayoutGroup));
@@ -41,6 +53,14 @@ namespace KompasUI
             AddLink(cr, "+7 (495) 123-45-67", "phone");
             AddSeparator(cr);
             AddLink(cr, "www.promrobotec.ru", "site");
+        }
+
+        /// <summary>Онлайн-статус прицела: текст + цвет (зелёный/жёлтый/красный).</summary>
+        public void SetAimStatus(string text, Color color)
+        {
+            if (statusText == null) return;
+            statusText.text = text;
+            statusText.color = color;
         }
 
         private void AddSeparator(RectTransform parent)
