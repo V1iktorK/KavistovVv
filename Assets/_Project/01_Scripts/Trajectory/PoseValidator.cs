@@ -228,26 +228,30 @@ namespace TrajectoryCore
             }
             else if (scara != null)
             {
-                ApplyScaraYaw(sj1, sRef1, (float)q[0]);
-                ApplyScaraYaw(sj2, sRef2, (float)q[1]);
-                // q[2] — АБСОЛЮТНАЯ высота z_5 над базой: доводим стержень по вертикали,
-                // не трогая плоскостное положение (оно задано поворотами). Идемпотентно.
+                // q[0] — отклонение звена 1 от покоя, q[1] — отклонение звена 2 ОТ ЗВЕНА 1,
+                // поэтому второму суставу добавляем поворот родителя (иначе кинематика рвётся).
+                ApplyScaraYaw(sj1, sRef1, (float)q[0], 0f);
+                ApplyScaraYaw(sj2, sRef2, (float)q[1], (float)q[0]);
+                // q[2] — АБСОЛЮТНАЯ высота z_5 над базой (идемпотентно).
                 Vector3 current = sj3.position;
                 float currentH = Vector3.Dot(current - basePos, up);
                 sj3.position = current + up * ((float)q[2] - currentH);
             }
         }
 
-        private void ApplyScaraYaw(Transform joint, Vector3 reference, float angleDeg)
+        /// <summary>Довернуть сустав так, чтобы его звено встало под углом (parentAngle + ownAngle) от покоя.</summary>
+        private void ApplyScaraYaw(Transform joint, Vector3 reference, float ownAngle, float parentAngle)
         {
-            // Приводим текущее направление звена к эталонному + угол.
-            Vector3 childOffset = Vector3.zero;
-            bool hasChild = joint.childCount > 0;
+            if (joint == null) return;
+            Vector3 childOffset;
             if (joint == sj1) childOffset = Vector3.ProjectOnPlane(sj2.position - sj1.position, up);
             else if (joint == sj2) childOffset = Vector3.ProjectOnPlane(sj3.position - sj2.position, up);
-            if (!hasChild || childOffset.sqrMagnitude < 1e-8f) return;
-            float current = Vector3.SignedAngle(reference, childOffset.normalized, up);
-            joint.Rotate(up, angleDeg - current, Space.World);
+            else return;
+            if (childOffset.sqrMagnitude < 1e-8f) return;
+
+            Vector3 desired = Quaternion.AngleAxis(parentAngle + ownAngle, up) * reference;
+            float delta = Vector3.SignedAngle(childOffset.normalized, desired.normalized, up);
+            joint.Rotate(up, delta, Space.World);
         }
 
         /// <summary>Прочитать капсульную цепочку (после Apply).</summary>
@@ -492,6 +496,51 @@ namespace TrajectoryCore
             }
             return (TcpAt(q) - goal).magnitude <= tolerance * 3f;
         }
+
+        /// <summary>
+        /// Применить конфигурацию SCARA к КОПИИ робота (фантом): θ1/θ2 — доворот звеньев
+        /// копии относительно их эталонных направлений, z — вертикальный сдвиг z_5.
+        /// Работает на копии, реального робота не трогает.
+        /// </summary>
+        public void ApplyScaraToCopy(Transform copyRoot, double[] q)
+        {
+            if (copyRoot == null || q == null || q.Length < 3) return;
+            Transform c1 = FindByPart(copyRoot, "J1_3");
+            Transform c2 = FindByPart(copyRoot, "J2_4");
+            Transform c3 = FindByPart(copyRoot, "z_5");
+            if (c1 == null || c2 == null || c3 == null) return;
+
+            Vector3 up = Vector3.up;
+            Vector3 restLink1 = Vector3.ProjectOnPlane(c2.position - c1.position, up).normalized;
+            Vector3 restLink2 = Vector3.ProjectOnPlane(c3.position - c2.position, up).normalized;
+            if (restLink1.sqrMagnitude < 1e-8f || restLink2.sqrMagnitude < 1e-8f) return;
+
+            // Звено 1: отклонение q[0]; звено 2: отклонение q[1] от звена 1 (+ поворот родителя).
+            RotateCopyTowards(c1, restLink1, up, (float)q[0]);
+            Vector3 curLink2 = Vector3.ProjectOnPlane(c3.position - c2.position, up).normalized;
+            Vector3 desired2 = Quaternion.AngleAxis((float)q[0] + (float)q[1], up) * restLink2;
+            c2.Rotate(up, Vector3.SignedAngle(curLink2, desired2, up), Space.World);
+
+            // Вертикальный сдвиг z_5 относительно текущей высоты копии.
+            float targetHeight = (float)q[2];
+            Vector3 refBase = basePos;
+            float cur = Vector3.Dot(c3.position - refBase, up);
+            c3.position += up * (targetHeight - cur);
+        }
+
+        private static void RotateCopyTowards(Transform joint, Vector3 restDir, Vector3 axis, float deltaFromRest)
+        {
+            if (joint == null) return;
+            Vector3 cur = Vector3.ProjectOnPlane(
+                joint == null ? Vector3.forward : (joint.childCount > 0 ? joint.GetChild(0).position - joint.position : Vector3.forward),
+                axis).normalized;
+            if (cur.sqrMagnitude < 1e-8f) cur = restDir;
+            Vector3 desired = Quaternion.AngleAxis(deltaFromRest, axis) * restDir;
+            joint.Rotate(axis, Vector3.SignedAngle(cur, desired, axis), Space.World);
+        }
+
+        /// <summary>Мировая позиция базы робота (для отсчёта хода z_5 и фантомов).</summary>
+        public Vector3 BasePosition => basePos;
 
         public bool WithinLimits(double[] q, float marginDeg = 0f)        {
             for (int i = 0; i < Dof; i++)

@@ -56,6 +56,17 @@ public class RobotController : MonoBehaviour
         targetRotation = rotation;
     }
 
+    /// <summary>
+    /// Сбросить цель: пока нет ПОДТВЕРЖДЁННОЙ позиции — робот не двигается
+    /// (критично для логики «два лазера»).
+    /// </summary>
+    public virtual void ClearTarget()
+    {
+        hasTarget = false;
+        targetPosition = tcp != null ? tcp.position : transform.position;
+        targetRotation = transform.rotation;
+    }
+
     public virtual void MoveToTarget(float deltaTime)
     {
         if (!hasTarget)

@@ -87,6 +87,7 @@ public class FreeFlyCameraController : MonoBehaviour
     private AimIndicator aimIndicator;
     private TrajectoryPlannerController plannerController;
     private TrajectoryFlowController flowController;
+    private RobotController selectedRobot;
 
     /// <summary>Подавить старую прямую телеоперацию кликом (движение — только через поток выбора).</summary>
     public bool suppressDirectTeleop = true;
@@ -275,9 +276,12 @@ public class FreeFlyCameraController : MonoBehaviour
         rightLaser = CreateLaser("Laser_RightHand");
 
         CreateFlashlight();
-        aimIndicator = gameObject.AddComponent<AimIndicator>(); // оракул достижимости (E1/E5)
-        plannerController = gameObject.AddComponent<TrajectoryPlannerController>(); // планировщик (P/1-2-3/F9)
-        flowController = gameObject.AddComponent<TrajectoryFlowController>();       // поток «два лазера»
+        aimIndicator = gameObject.AddComponent<AimIndicator>(); // оракул достижимости
+        flowController = gameObject.AddComponent<TrajectoryFlowController>(); // поток «два лазера»
+
+        // Ни один робот не должен двигаться до подтверждения точки.
+        foreach (RobotController rc in Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include))
+            if (rc != null) rc.ClearTarget();
 
         if (enableCameraCollision)
         {
@@ -444,10 +448,12 @@ public class FreeFlyCameraController : MonoBehaviour
         if (IsKeyPressed(KeyCode.Z)) leftHandEnabled = !leftHandEnabled;
         if (IsKeyPressed(KeyCode.X)) rightHandEnabled = !rightHandEnabled;
 
-        // Выбор робота по F (или LB на геймпаде): контекстный — см. SelectRobotContextual.
-        if (IsKeyPressed(KeyCode.F)) SelectRobotContextual();
+        // F: смотрит ли «шарик» лазера (точка прицела) на робота.
+        //   попал в робота  → он становится выбранным;
+        //   не попал ни в кого → выбор обнуляется.
+        if (IsKeyPressed(KeyCode.F)) SelectRobotByAim();
         else if (gamepadMode && Gamepad.current != null && Gamepad.current.leftShoulder.wasPressedThisFrame)
-            SelectRobotContextual();
+            SelectRobotByAim();
 
         bool lmbDown = IsMouseButtonDownThisFrame(0);
         bool rmbDown = IsMouseButtonDownThisFrame(1);
@@ -564,15 +570,19 @@ public class FreeFlyCameraController : MonoBehaviour
         if (plannerController != null)
             plannerController.UpdateAim(aimPoint, aimHitSurface);
 
-        // Поток выбора «два лазера»: красный (ЛКМ) — точка, зелёный (ПКМ) — траектория/фантом.
+        // Поток выбора «два лазера»: красный — точка, зелёный — траектория/фантом.
+        // Источники подтверждения: ЛКМ/ПКМ (десктоп), триггеры геймпада (прокси VR),
+        // клавиши E/R (альтернатива, если мышь занята).
         if (flowController != null)
         {
-            bool redConfirm = Mouse.current != null
-                ? Mouse.current.leftButton.wasPressedThisFrame
-                : Input.GetMouseButtonDown(0);
-            bool greenConfirm = Mouse.current != null
-                ? Mouse.current.rightButton.wasPressedThisFrame
-                : Input.GetMouseButtonDown(1);
+            bool redConfirm =
+                (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) ||
+                (Gamepad.current != null && Gamepad.current.leftTrigger.wasPressedThisFrame) ||
+                (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame);
+            bool greenConfirm =
+                (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame) ||
+                (Gamepad.current != null && Gamepad.current.rightTrigger.wasPressedThisFrame) ||
+                (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame);
             bool cancel = Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
             flowController.UpdateAim(aimPoint, aimHitSurface, redConfirm, greenConfirm, cancel);
         }
@@ -639,8 +649,8 @@ public class FreeFlyCameraController : MonoBehaviour
             endpoint = hand + transform.forward * laserLength;
         }
 
-        laser.startColor = color;
-        laser.endColor = new Color(color.r, color.g, color.b, 0.15f);
+        laser.startColor = new Color(color.r, color.g, color.b, 0.38f);   // ~25–50 %: заметно, но прозрачно
+        laser.endColor = new Color(color.r, color.g, color.b, 0.12f);
         laser.enabled = true;
         laser.SetPosition(0, hand);
         laser.SetPosition(1, endpoint);
@@ -653,6 +663,10 @@ public class FreeFlyCameraController : MonoBehaviour
     /// </summary>
     private void HandleClickActions()
     {
+        // КРИТИЧНО: при включённом новом потоке («два лазера») прямая телеоперация
+        // кликом ОТКЛЮЧЕНА — робот не двигается, пока позиция не подтверждена красным.
+        if (suppressDirectTeleop) return;
+
         bool currentlyPressed = IsMouseButtonPressed(0);
         bool clicked = currentlyPressed && !primaryButtonWasPressed;
         primaryButtonWasPressed = currentlyPressed;
@@ -749,6 +763,70 @@ public class FreeFlyCameraController : MonoBehaviour
         if (robot.endEffector != null) return robot.endEffector.position;
         return robot.transform.position;
     }
+
+    /// <summary>
+    /// F: «шарик» лазера (точка прицела) на роботе → выбираем его;
+    /// ни на кого не смотрит → обнуляем выбор (никакого перебора списка).
+    /// Работает и для SCARA, и для 6-осевого: ищем контроллер в иерархии попадания,
+    /// а если у мешей нет коллайдеров — по габаритам модели (bounds).
+    /// </summary>
+    private void SelectRobotByAim()
+    {
+        RobotController aimed = FindRobotUnderAim();
+        if (aimed == null && aimHitSurface) aimed = FindRobotByAimVolume(aimPoint);
+
+        RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include);
+
+        if (aimed != null)
+        {
+            foreach (RobotController rc in robots)
+                if (rc != null) rc.SetActive(rc == aimed);
+            selectedRobot = aimed;
+            Debug.Log("[FreeFlyCamera] Выбран робот: " + aimed.robotName);
+            KompasUI.KompasUIManager.SetPlanStatus("Выбран робот: " + aimed.robotName,
+                new Color(0.6f, 0.9f, 1f));
+        }
+        else
+        {
+            foreach (RobotController rc in robots)
+                if (rc != null) rc.SetActive(false);
+            selectedRobot = null;
+            Debug.Log("[FreeFlyCamera] Выбор робота сброшен (луч не на роботе)");
+            KompasUI.KompasUIManager.SetPlanStatus("Выбор робота сброшен", Color.gray);
+        }
+    }
+
+    /// <summary>Робот, чья модель накрывает точку прицела (fallback без коллайдеров).</summary>
+    private static RobotController FindRobotByAimVolume(Vector3 point)
+    {
+        RobotController best = null;
+        float bestDist = float.MaxValue;
+        foreach (RobotController rc in Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include))
+        {
+            if (rc == null) continue;
+            Bounds b = GetRobotBounds(rc);
+            b.Expand(0.05f);
+            if (!b.Contains(point)) continue;
+            float d = Vector3.Distance(b.center, point);
+            if (d < bestDist) { bestDist = d; best = rc; }
+        }
+        return best;
+    }
+
+    private static Bounds GetRobotBounds(RobotController robot)
+    {
+        Renderer[] rs = robot.GetComponentsInChildren<Renderer>(true);
+        if (rs == null || rs.Length == 0) return new Bounds(robot.transform.position, Vector3.one * 0.3f);
+        Bounds b = rs[0].bounds;
+        for (int i = 1; i < rs.Length; i++) b.Encapsulate(rs[i].bounds);
+        return b;
+    }
+
+    /// <summary>Текущий выбранный робот (для потока траекторий).</summary>
+    public RobotController SelectedRobot => selectedRobot;
+
+    /// <summary>Точка прицела (шарик лазера) в мире.</summary>
+    public Vector3 AimPosition => aimPoint;
 
     /// <summary>
     /// F: контекстный выбор робота.

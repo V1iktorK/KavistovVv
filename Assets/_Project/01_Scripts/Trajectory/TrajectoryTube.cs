@@ -11,10 +11,11 @@ namespace TrajectoryCore
     /// </summary>
     public class TrajectoryTube : MonoBehaviour
     {
-        public float radius = 0.05f;          // радиус «колбаски» (выбор с расстояния до ~1 юнита)
-        public Color baseColor = new Color(0.45f, 0.75f, 1f, 0.55f);
-        public Color hoverColor = new Color(0.35f, 1f, 0.5f, 0.95f);
-        public Color selectedColor = new Color(0.15f, 1f, 0.35f, 1f);
+        public float radius = 0.05f;          // радиус «колбаски» (захват лучом с ~1 юнита)
+        public Color baseColor = new Color(1f, 0.45f, 0.03f, 0.9f);    // ярко-оранжевый (HDRP)
+        public Color hoverColor = new Color(1f, 0.68f, 0.15f, 1f);     // подсветка наведения
+        public Color selectedColor = new Color(1f, 0.85f, 0.3f, 1f);   // выбранная
+        public float tubeAlpha = 0.07f;       // «колбаска» почти невидима (только для захвата)
 
         private Vector3[] points = new Vector3[0];
         private LineRenderer line;            // основная линия
@@ -70,7 +71,8 @@ namespace TrajectoryCore
             {
                 Material m = tubeRenderer.material;
                 if (m != null && m.HasProperty("_BaseColor"))
-                    m.SetColor("_BaseColor", new Color(c.r, c.g, c.b, selected ? 0.22f : 0.12f));
+                    m.SetColor("_BaseColor", new Color(c.r, c.g, c.b,
+                        selected ? tubeAlpha * 2.2f : (hover ? tubeAlpha * 1.6f : tubeAlpha)));
             }
         }
 

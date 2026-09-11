@@ -26,6 +26,20 @@ public class TrajectoryFlowController : MonoBehaviour
     public float motionSpeed = 0.05f;          // м/с по TCP: 0.05 = 1 м за 20 секунд
     public bool slowMotionEnabled = true;
 
+    [Header("Производительность")]
+    public float planningSliceMs = 12f;        // бюджет планирования на кадр (тайм-слайсы)
+    public int candidatesPerSlice = 1;         // сколько кандидатов считаем за кадр
+
+    [Header("Стенды (два стола + роботы)")]
+    public bool ensureStandsOnStart = true;    // создать стенды, если их нет в сцене
+
+    private readonly System.Collections.Generic.Queue<int> planQueue =
+        new System.Collections.Generic.Queue<int>();
+    private double[] planningStart;
+    private Vector3 planningTarget;
+    private int planningWant;
+    private readonly List<PlannedTrajectory> plannedSoFar = new List<PlannedTrajectory>();
+
     private LaserManager lasers;
     private PhantomManager phantoms;
     private TrajectoryExecutor executor;
@@ -59,10 +73,27 @@ public class TrajectoryFlowController : MonoBehaviour
         lasers.UpdateRays(aimPoint, aimHit);
         if (!started)
         {
+            if (ensureStandsOnStart) StandBuilder.EnsureStands(0.98f);
             Rebind();
             started = true;
         }
-        if (robot == null) return;
+
+        // Привязка к выбранному роботу: пока робот не выбран (F), ничего не делаем.
+        RobotController active = FindSelectedRobot();
+        if (active != robot)
+        {
+            robot = active;
+            Rebind();
+        }
+        if (robot == null)
+        {
+            if (redConfirm || greenConfirm)
+                Report("Сначала выберите робота: наведите шарик лазера и нажмите F", new Color(1f, 0.85f, 0.3f));
+            return;
+        }
+
+        // Планируем порциями по кадрам (тайм-слайсы) — без пиков латентности.
+        ProcessPlanningQueue();
 
         // Мир столкновений обновляем стробоскопически.
         worldTimer -= Time.deltaTime;
@@ -83,18 +114,21 @@ public class TrajectoryFlowController : MonoBehaviour
             phantoms.Hide();
             state.hasPoint = false;
             state.phase = FlowPhase.Idle;
-            Report("Точка смещена — подтвердите новую (ЛКМ)", new Color(1f, 0.85f, 0.3f));
+            robot.ClearTarget();   // робот НЕ должен никуда тянуться без подтверждения
+            Report("Точка смещена — подтвердите новую (ЛКМ / триггер)", new Color(1f, 0.85f, 0.3f));
         }
 
         switch (state.phase)
         {
             case FlowPhase.Idle:
+                robot.ClearTarget();                 // ключевая гарантия: без точки — стоим
                 if (executor != null && executor.IsRunning) executor.Stop(SafetyReason.OperatorStop);
                 if (redConfirm && aimHit) LockPoint(aimPoint);
                 break;
 
             case FlowPhase.PointLocked:
             case FlowPhase.TrajectoryHover:
+                robot.ClearTarget();
                 if (redConfirm && aimHit) LockPoint(aimPoint);
                 else UpdateTrajectoryHover();
                 if (greenConfirm && state.hoveredTrajectory >= 0) SelectTrajectory(state.hoveredTrajectory);
@@ -102,6 +136,7 @@ public class TrajectoryFlowController : MonoBehaviour
 
             case FlowPhase.TrajectorySelected:
             case FlowPhase.PhantomHover:
+                robot.ClearTarget();
                 UpdatePhantomHover();
                 if (greenConfirm && state.hoveredPhantom >= 0) SelectPhantom(state.hoveredPhantom);
                 break;
@@ -111,6 +146,42 @@ public class TrajectoryFlowController : MonoBehaviour
                 if (!executor.IsRunning) state.phase = FlowPhase.PhantomSelected;
                 break;
         }
+    }
+
+    /// <summary>Пошаговое планирование: один прогон планировщика за кадр (тайм-слайс).</summary>
+    private void ProcessPlanningQueue()
+    {
+        if (planQueue.Count == 0) return;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int done = 0;
+        while (planQueue.Count > 0 && done < Mathf.Max(1, candidatesPerSlice) &&
+               sw.Elapsed.TotalMilliseconds < planningSliceMs)
+        {
+            int seedIndex = planQueue.Dequeue();
+            done++;
+            List<PlannedTrajectory> c = planner.Plan(planningStart, planningTarget, 2, 1000 + seedIndex * 7919);
+            if (c != null)
+            {
+                foreach (PlannedTrajectory t in c)
+                {
+                    bool dup = false;
+                    foreach (PlannedTrajectory ex in plannedSoFar)
+                        if (System.Math.Abs(ex.Time - t.Time) < 1e-3 &&
+                            System.Math.Abs(ex.Length - t.Length) < 1e-3) { dup = true; break; }
+                    if (!dup) plannedSoFar.Add(t);
+                }
+            }
+            if (plannedSoFar.Count >= planningWant) planQueue.Clear();
+        }
+        sw.Stop();
+        metrics.RecordPlan(sw.Elapsed.TotalMilliseconds, plannedSoFar.Count > 0,
+            plannedSoFar.Count > 0 ? plannedSoFar[0] : null);
+
+        // Обновляем визуал по мере готовности (пользователь видит, как появляются варианты).
+        if (done > 0) RebuildCandidateVisuals();
+        if (planQueue.Count == 0 && plannedSoFar.Count > 0)
+            Report("Кандидатов: " + state.candidates.Count + " · наведите ЗЕЛЁНЫЙ луч на колбаску",
+                new Color(1f, 0.75f, 0.35f));
     }
 
     // ------------------------------------------------------------------ шаги сценария
@@ -123,13 +194,59 @@ public class TrajectoryFlowController : MonoBehaviour
         state.ResetTrajectorySelection();
         phantoms.Hide();
         HideTrajectories();
-        GenerateCandidates(point);
-        state.phase = state.candidates.Count > 0 ? FlowPhase.PointLocked : FlowPhase.Idle;
 
-        if (state.candidates.Count == 0)
-            Report("Траектории не найдены — точка недостижима", new Color(1f, 0.4f, 0.35f));
-        else
-            Report("Кандидатов: " + state.candidates.Count + " · наведите ЗЕЛЁНЫЙ луч на колбаску (ПКМ)", new Color(0.6f, 0.9f, 1f));
+        // Планирование — ПОРЦИЯМИ по кадрам: ставим очередь сидов.
+        planningStart = validator.CopyCurrent();
+        planningTarget = point;
+        planningWant = Mathf.Clamp(candidateCount, 1, 8);
+        plannedSoFar.Clear();
+        planQueue.Clear();
+        for (int k = 0; k < planningWant; k++) planQueue.Enqueue(k);
+        state.phase = FlowPhase.PointLocked;
+        Report("Точка подтверждена · считаю траектории…", new Color(1f, 0.8f, 0.4f));
+    }
+
+    /// <summary>Перестроить «колбаски» по уже готовым кандидатам (вызывается по мере планирования).</summary>
+    private void RebuildCandidateVisuals()
+    {
+        HideTrajectories();
+        var plans = new List<PlannedTrajectory>(plannedSoFar);
+        plans.Sort((a, b) => a.Score.CompareTo(b.Score));
+        int want = Mathf.Clamp(candidateCount, 1, 8);
+        if (plans.Count > want) plans.RemoveRange(want, plans.Count - want);
+
+        int id = 0;
+        foreach (PlannedTrajectory t in plans)
+        {
+            var cand = new TrajectoryCandidate
+            {
+                id = id,
+                label = "Траектория " + (++id),
+                plan = t,
+                timeS = (float)t.Time,
+                minClearance = t.MinClearance,
+                limitMarginDeg = t.LimitMargin,
+                score = t.Score,
+                safe = t.MinClearance >= gate.minClearance && t.LimitMargin >= gate.minLimitMarginDeg
+            };
+            if (!cand.safe) cand.why = "запас ниже порога";
+
+            int n = t.Path.Length;
+            int stride = Mathf.Max(1, n / 60);
+            var pts = new List<Vector3>();
+            for (int i = 0; i < n; i += stride) pts.Add(validator.TcpAt(t.Path[i]));
+            if (pts.Count < 2) continue;
+            cand.tube = pts.ToArray();
+            cand.lengthM = TubeMath.PolylineLength(cand.tube);
+            if (slowMotionEnabled) MotionTiming.RescaleToSpeed(t, cand.lengthM, motionSpeed);
+
+            GameObject go = new GameObject(cand.label);
+            go.transform.SetParent(transform, false);
+            cand.view = go.AddComponent<TrajectoryTube>();
+            cand.view.radius = tubeRadius;
+            cand.view.Build(cand.tube, new Color(1f, 0.45f, 0.03f, 0.9f)); // ярко-оранжевые
+            state.candidates.Add(cand);
+        }
     }
 
     private void GenerateCandidates(Vector3 point)
@@ -193,8 +310,7 @@ public class TrajectoryFlowController : MonoBehaviour
             go.transform.SetParent(transform, false);
             cand.view = go.AddComponent<TrajectoryTube>();
             cand.view.radius = tubeRadius;
-            cand.view.Build(cand.tube, cand.safe ? new Color(0.45f, 0.75f, 1f, 0.6f)
-                                                 : new Color(1f, 0.5f, 0.35f, 0.5f));
+            cand.view.Build(cand.tube, new Color(1f, 0.45f, 0.03f, 0.9f)); // ярко-оранжевые линии
             state.candidates.Add(cand);
         }
     }
@@ -342,7 +458,7 @@ public class TrajectoryFlowController : MonoBehaviour
 
     private void Rebind()
     {
-        robot = FindActiveRobot();
+        if (robot == null) return;   // нет выбранного робота — ждём F
         validator.Init(robot);
         validator.linkRadius = 0.06f;
         ik.Init(validator);
@@ -353,6 +469,16 @@ public class TrajectoryFlowController : MonoBehaviour
         planner.maxIterations = 700;
         gate.NotifyState();
         phantoms.Init(robot, validator);
+        robot.ClearTarget();   // движение начнётся только после выбора фантома
+    }
+
+    /// <summary>Активный (выбранный по F) робот; если выбор обнулён — null.</summary>
+    private static RobotController FindSelectedRobot()
+    {
+        RobotController[] robots = Object.FindObjectsByType<RobotController>(FindObjectsInactive.Exclude);
+        foreach (RobotController rc in robots)
+            if (rc != null && rc.isActive) return rc;
+        return null;
     }
 
     private static void Report(string text, Color color)

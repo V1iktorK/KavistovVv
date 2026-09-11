@@ -128,11 +128,18 @@ namespace TrajectoryCore
             ghost.transform.position = template.transform.position + offset;
             ghost.transform.rotation = template.transform.rotation;
 
-            // Копии задаём ту же позу, что и у выбранной ветви IK (через суставы копии).
+            // Копии задаём ту же позу, что и у выбранной ветви IK.
             if (validator != null && validator.Ready)
             {
-                Transform[] copyJoints = validator.FindCopyJoints(ghost.transform);
-                if (copyJoints.Length > 0) validator.ApplyToCopy(copyJoints, cfg.q);
+                if (validator.Dof == 3)
+                {
+                    validator.ApplyScaraToCopy(ghost.transform, cfg.q);   // SCARA: 4 DOF
+                }
+                else
+                {
+                    Transform[] copyJoints = validator.FindCopyJoints(ghost.transform);
+                    if (copyJoints.Length > 0) validator.ApplyToCopy(copyJoints, cfg.q);
+                }
             }
 
             // Полупрозрачный «призрачный» материал.

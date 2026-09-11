@@ -22,6 +22,7 @@ namespace TrajectoryCore
         public IkBranchTag tag;
         public double fkError;      // ошибка прямой задачи по TCP, м
         public bool withinLimits;
+        public bool nearSingularity; // близко к вырождению (вытянута/сложена — SCARA; wrist-singular — 6R)
     }
 
     /// <summary>
@@ -43,6 +44,7 @@ namespace TrajectoryCore
 
         private PoseValidator v;
         public bool Ready { get; private set; }
+        public string LastScaraDebug { get; private set; } = "";
 
         // Замеренная геометрия 6-осевого
         private Vector3 baseOrigin, up, rRef, nRef;
@@ -93,6 +95,7 @@ namespace TrajectoryCore
         {
             var list = SolveAll(target, seed);
             if (v == null || seed == null) return list;
+            if (v.Dof == 3) return list;   // SCARA: аналитических ветвей (≤4) достаточно
             if (list.Count >= maxSolutions) return list;
 
             const int seedCount = 6;
@@ -223,57 +226,76 @@ namespace TrajectoryCore
 
         /// <summary>
         /// SCARA (q = (θ1, θ2, z)): аналитика 2R + призматическая ось.
-        /// θ1 — азимут на цель, θ2 = ±acos(...) (2 ветви локтя), z — кламп по ходу.
+        /// Ветви: elbow up/down × передний/задний вылет (q1 и q1+180°) = до 4 конфигураций.
+        /// Рабочая зона — КОЛЬЦО r ∈ [|a1−a2|, a1+a2]; сингулярности — полное вытягивание
+        /// (q2 ≈ 0) и полное складывание (q2 ≈ 180°); ориентация фланца без wrist flip.
         /// </summary>
         private List<IkSolution> SolveAllScara(Vector3 target, double[] seed)
         {
             var list = new List<IkSolution>();
             if (v.Dof != 3) return list;
 
-            // Геометрия: плечо (J1) → локоть (J2) → z_5.
             double[] zero = new double[3];
             Vector3 shoulder = v.PivotAt(0, zero);
             Vector3 elbow0 = v.PivotAt(1, zero);
             Vector3 wrist0 = v.PivotAt(2, zero);
             Vector3 up = v.AxisWorld(0, zero);
-            Vector3 ref1 = Vector3.ProjectOnPlane(elbow0 - shoulder, up);   // направление звена 1 в покое
-            Vector3 ref2 = Vector3.ProjectOnPlane(wrist0 - elbow0, up);     // направление звена 2 в покое
+            Vector3 ref1 = Vector3.ProjectOnPlane(elbow0 - shoulder, up);
+            Vector3 ref2 = Vector3.ProjectOnPlane(wrist0 - elbow0, up);
             float a1 = ref1.magnitude, a2 = ref2.magnitude;
             if (a1 < 1e-4f || a2 < 1e-4f) return list;
             ref1.Normalize(); ref2.Normalize();
-            float restAngle2 = Vector3.SignedAngle(ref1, ref2, up);        // нулевой угол локтя
+            float restAngle2 = Vector3.SignedAngle(ref1, ref2, up);
 
             Vector3 d = Vector3.ProjectOnPlane(target - shoulder, up);
             float r = d.magnitude;
-            float cosQ2 = (r * r - a1 * a1 - a2 * a2) / (2f * a1 * a2);
-            if (Mathf.Abs(cosQ2) > 1f) return list;
-            float q2Abs = Mathf.Acos(Mathf.Clamp(cosQ2, -1f, 1f)) * Mathf.Rad2Deg;
+            float reachMax = a1 + a2 - 0.002f;
+            float reachMin = Mathf.Abs(a1 - a2) + 0.002f;
+            LastScaraDebug = string.Format("a1={0:F3} a2={1:F3} shoulder={2} r={3:F3} (кольцо {4:F3}..{5:F3})",
+                a1, a2, shoulder.ToString("0.00"), r, reachMin, reachMax);            if (r > reachMax || r < reachMin) return list;      // вне кольца — решения нет
+
+            float cosQ2 = Mathf.Clamp((r * r - a1 * a1 - a2 * a2) / (2f * a1 * a2), -1f, 1f);
+            float q2Abs = Mathf.Acos(cosQ2) * Mathf.Rad2Deg;
             float az = Vector3.SignedAngle(ref1, d, up);
+            // Высота z_5 отсчитывается ОТ БАЗЫ (не от плеча!) — иначе системная ошибка ~0.2 м.
+            double zTarget = System.Math.Min(System.Math.Max(
+                Vector3.Dot(target - v.BasePosition, up), v.Lower[2]), v.Upper[2]);
 
-            float height = Vector3.Dot(target - shoulder, up)
-                         + Vector3.Dot(shoulder - v.PivotAt(0, zero), up); // высота относительно базы
-            double zTarget = System.Math.Min(System.Math.Max(height, v.Lower[2]), v.Upper[2]);
+            float bestErr = float.MaxValue;
 
-            for (int e = 0; e < 2; e++)
+            for (int s = 0; s < 2; s++)                 // передний / задний вылет
             {
-                bool elbowDown = e == 1;
-                float q2rel = elbowDown ? -q2Abs : q2Abs;
-                float phi = Mathf.Atan2(a2 * Mathf.Sin(q2rel * Mathf.Deg2Rad),
-                                        a1 + a2 * Mathf.Cos(q2rel * Mathf.Deg2Rad)) * Mathf.Rad2Deg;
-                double q1 = az - phi;
-                double q2 = q2rel - restAngle2;
+                bool backReach = s == 1;
+                float azimuth = az + (backReach ? 180f : 0f);
+                float radial = r * (backReach ? -1f : 1f);
 
-                var q = (double[])seed.Clone();
-                q[0] = q1; q[1] = q2; q[2] = zTarget;
-                var sol = new IkSolution
+                for (int e = 0; e < 2; e++)             // локоть вверх / вниз
                 {
-                    q = q,
-                    tag = new IkBranchTag { shoulderFar = false, elbowDown = elbowDown, wristFlip = false },
-                    withinLimits = v.WithinLimits(q, 0f)
-                };
-                sol.fkError = (v.TcpAt(q) - target).magnitude;
-                list.Add(sol);
+                    bool elbowDown = e == 1;
+                    float q2rel = elbowDown ? -q2Abs : q2Abs;
+                    float phi = Mathf.Atan2(a2 * Mathf.Sin(q2rel * Mathf.Deg2Rad),
+                                            a1 + a2 * Mathf.Cos(q2rel * Mathf.Deg2Rad)) * Mathf.Rad2Deg;
+                    double q1 = azimuth - phi;
+                    double q2 = q2rel - restAngle2;
+
+                    var q = (double[])seed.Clone();
+                    q[0] = q1; q[1] = q2; q[2] = zTarget;
+
+                    bool singular = Mathf.Abs(cosQ2) > 0.985f;   // вытянута или сложена
+                    var sol = new IkSolution
+                    {
+                        q = q,
+                        tag = new IkBranchTag { shoulderFar = backReach, elbowDown = elbowDown, wristFlip = false },
+                        withinLimits = v.WithinLimits(q, 0f),
+                        fkError = (v.TcpAt(q) - target).magnitude,
+                        nearSingularity = singular
+                    };
+                    if (sol.fkError <= 0.05f) list.Add(sol);   // допуск 5 см: z_5 — «палец» стержня
+                    bestErr = System.Math.Min(bestErr, (float)sol.fkError);
+                    _ = radial;
+                }
             }
+            LastScaraDebug += " | лучший err=" + (bestErr == float.MaxValue ? "n/a" : bestErr.ToString("0.000"));
             return list;
         }
 

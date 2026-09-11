@@ -11,8 +11,13 @@ using UnityEngine;
 public class AimIndicator : MonoBehaviour
 {
     [Header("Маркер цели")]
-    public float markerSize = 0.035f;
+    public float markerSize = 0.045f;          // «шарик» на конце лазера
+    public float markerEmission = 3.2f;        // яркость шарика (на уровне лазера или выше)
     public float worldRebuildInterval = 0.5f;
+
+    [Header("Выбор ветви IK (только при подтверждённой цели)")]
+    [Tooltip("Разрешить агенту выбора ветви влиять на робота. Включает поток траекторий, а не сам прицел")]
+    public bool allowSeedSelection = false;
 
     [Header("Запасы")]
     public float clearance = 0.02f;
@@ -113,9 +118,10 @@ public class AimIndicator : MonoBehaviour
             ApplyColor(Last.verdict);
         }
 
-        // Выбор «удобной» ветви IK для живой телеоперации (posture locking):
-        // робот поедет в выбранную конфигурацию, а не в вывернутую.
-        if (lastRobot is SixAxisController six && ik.Ready && validator.Ready)
+        // Выбор «удобной» ветви IK (posture locking). ВАЖНО: влияет на робота только
+    // когда это разрешено (allowSeedSelection) — иначе без подтверждённой точки
+    // робот не должен никуда тянуться.
+        if (allowSeedSelection && lastRobot is SixAxisController six && ik.Ready && validator.Ready)
         {
             if ((aimPoint - lastSelectionPoint).sqrMagnitude > 0.0004f) // > 2 см
             {
@@ -145,7 +151,7 @@ public class AimIndicator : MonoBehaviour
         if (markerMaterial.HasProperty("_BaseColor")) markerMaterial.SetColor("_BaseColor", c);
         if (markerMaterial.HasProperty("_EmissiveColor"))
         {
-            markerMaterial.SetColor("_EmissiveColor", c * 2f);
+            markerMaterial.SetColor("_EmissiveColor", c * markerEmission);   // ярче линии лазера
             markerMaterial.EnableKeyword("_EMISSION");
         }
         if (markerMaterial.HasProperty("_Color")) markerMaterial.SetColor("_Color", c);

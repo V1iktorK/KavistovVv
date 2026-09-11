@@ -574,9 +574,17 @@ public class SixAxisController : RobotController
     //  Управление целью
     // ------------------------------------------------------------------
 
-    public override void SetTarget(Vector3 position)
+    /// <summary>Сброс цели: робот стоит, пока позиция не подтверждена (логика двух лазеров).</summary>
+    public override void ClearTarget()
     {
-        targetPosition = position;
+        base.ClearTarget();
+        smoothingInitialized = false;
+        preferredSeed = null;
+        seedPending = false;
+    }
+
+    public override void SetTarget(Vector3 position)
+    {        targetPosition = position;
         hasTarget = true;
 
         if (!smoothingInitialized)
