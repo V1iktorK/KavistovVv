@@ -102,6 +102,66 @@ namespace KompasUI
             planStatusTime = Time.realtimeSinceStartup;
         }
 
+        // Всплывающая подсказка у объекта (метрики траектории/фантома).
+        private static string tooltipText = "";
+        private static Vector3 tooltipWorld;
+        private static float tooltipTime = -999f;
+
+        /// <summary>Показать подсказку у мировой точки (метрики траектории/фантома).</summary>
+        public static void SetTooltip(string text, Vector3 worldPos)
+        {
+            tooltipText = text;
+            tooltipWorld = worldPos;
+            tooltipTime = Time.realtimeSinceStartup;
+        }
+
+        private void UpdateTooltip()
+        {
+            if (statusBar == null || canvasRect == null) return;
+            Camera cam = MainCamera;
+            if (cam == null) return;
+
+            if (tooltipVisual == null)
+            {
+                tooltipVisual = KompasTheme.CreateText(canvasRect, "Tooltip", "",
+                    KompasTheme.FontSize, TextAnchor.MiddleLeft, KompasTheme.TextMain);
+                Image bg = KompasTheme.CreatePanel(canvasRect, "TooltipBg", KompasTheme.PanelBg);
+                tooltipBg = bg.rectTransform;
+                tooltipBg.SetSiblingIndex(tooltipVisual.rectTransform.GetSiblingIndex());
+            }
+
+            bool show = Time.realtimeSinceStartup - tooltipTime < 1.2f && !string.IsNullOrEmpty(tooltipText);
+            tooltipVisual.gameObject.SetActive(show);
+            if (tooltipBg != null) tooltipBg.gameObject.SetActive(show);
+            if (!show) return;
+
+            tooltipVisual.text = tooltipText;
+            Vector3 sp = cam.WorldToScreenPoint(tooltipWorld);
+            bool behind = sp.z < 0f;
+            tooltipVisual.gameObject.SetActive(!behind);
+            if (tooltipBg != null) tooltipBg.gameObject.SetActive(!behind);
+            if (behind) return;
+
+            Vector2 local;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, sp, null, out local);
+            RectTransform tr = tooltipVisual.rectTransform;
+            tr.anchorMin = tr.anchorMax = new Vector2(0.5f, 0.5f);
+            tr.pivot = new Vector2(0f, 0f);
+            tr.anchoredPosition = local + new Vector2(16f, 10f);
+            tr.sizeDelta = new Vector2(620f, 22f);
+
+            if (tooltipBg != null)
+            {
+                tooltipBg.anchorMin = tooltipBg.anchorMax = new Vector2(0.5f, 0.5f);
+                tooltipBg.pivot = new Vector2(0f, 0f);
+                tooltipBg.anchoredPosition = local + new Vector2(8f, 4f);
+                tooltipBg.sizeDelta = new Vector2(640f, 34f);
+            }
+        }
+
+        private Text tooltipVisual;
+        private RectTransform tooltipBg;
+
         private void SetVisibleInternal(bool visible)
         {
             uiVisible = visible;
@@ -463,6 +523,7 @@ namespace KompasUI
             HandlePlacementInput();
             TrackActiveRobotForProperties();
             UpdateAimStatus();
+            UpdateTooltip();
         }
 
         /// <summary>Статус прицела слева внизу: достижимость/запас/причина (от AimIndicator).</summary>

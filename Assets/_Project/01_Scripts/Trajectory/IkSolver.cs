@@ -84,6 +84,73 @@ namespace TrajectoryCore
             Ready = true;
         }
 
+        /// <summary>
+        /// Расширенный набор решений для «фантомов» (MVP-3): аналитические ветви +
+        /// детерминированный мультисид-CCD (текущая поза, «дом», зеркала локтя/плеча,
+        /// переворот запястья). Дубликаты по конфигурации отбрасываются.
+        /// </summary>
+        public List<IkSolution> SolveAllSeeded(Vector3 target, double[] seed, int maxSolutions = 6)
+        {
+            var list = SolveAll(target, seed);
+            if (v == null || seed == null) return list;
+            if (list.Count >= maxSolutions) return list;
+
+            const int seedCount = 6;
+            for (int k = 0; k < seedCount && list.Count < maxSolutions; k++)
+            {
+                var s = (double[])seed.Clone();
+                switch (k)
+                {
+                    case 0: break;                                   // текущая поза
+                    case 1: s[1] -= 45; s[2] += 45; break;            // локоть «вверх»
+                    case 2: s[1] += 45; s[2] -= 45; break;            // локоть «вниз»
+                    case 3: s[0] += 180; break;                       // плечо развёрнуто
+                    case 4: s[3] += 180; s[4] = -s[4]; s[5] += 180; break; // переворот запястья
+                    case 5: s[1] -= 70; s[2] += 70; s[4] = -25; break;     // «сложенная» рука
+                }
+                if (!v.WithinLimits(s)) continue;
+                if (!v.SolveIk(target, s, out double[] q, ccdIterations, positionTolerance)) continue;
+                if (!v.WithinLimits(q)) continue;
+
+                double err = (v.TcpAt(q) - target).magnitude;
+                if (err > positionTolerance * 3f) continue;
+
+                bool dup = false;
+                foreach (IkSolution ex in list)
+                    if (ConfigDistance(ex.q, q) < 0.05) { dup = true; break; }
+                if (dup) continue;
+
+                list.Add(new IkSolution
+                {
+                    q = q,
+                    tag = new IkBranchTag
+                    {
+                        shoulderFar = k == 3,
+                        elbowDown = k == 2 || k == 5,
+                        wristFlip = k == 4
+                    },
+                    withinLimits = true,
+                    fkError = err
+                });
+            }
+            return list;
+        }
+
+        private double ConfigDistance(double[] a, double[] b)
+        {
+            if (a == null || b == null) return 0;
+            double s = 0;
+            int n = System.Math.Min(a.Length, b.Length);
+            for (int i = 0; i < n; i++)
+            {
+                double r = System.Math.Abs(v.Upper[i] - v.Lower[i]);
+                if (r < 1e-6) r = 1;
+                double d = (a[i] - b[i]) / r;
+                s += d * d;
+            }
+            return System.Math.Sqrt(s);
+        }
+
         /// <summary>Все ветви аналитической IK; при неудаче — многостартовый CCD.</summary>
         public List<IkSolution> SolveAll(Vector3 target, double[] seed)
         {
@@ -134,6 +201,10 @@ namespace TrajectoryCore
                             q[5] += 180.0;
                         }
 
+                        // Доводим запястье (оси 4..6) на кончик инструмента: позиционная часть
+                        // уже решена, остаётся 3-DOF CCD — быстро и без потери ветви.
+                        v.SolveIkRange(target, q, 3, v.Dof - 1, 50, positionTolerance);
+
                         var sol = new IkSolution
                         {
                             q = q,
@@ -141,7 +212,7 @@ namespace TrajectoryCore
                         };
                         sol.withinLimits = v.WithinLimits(q, 0f);
                         sol.fkError = (v.TcpAt(q) - target).magnitude;
-                        if (sol.fkError <= positionTolerance * 5f) result.Add(sol);
+                        if (sol.fkError <= positionTolerance * 2f) result.Add(sol);
                     }
                 }
             }

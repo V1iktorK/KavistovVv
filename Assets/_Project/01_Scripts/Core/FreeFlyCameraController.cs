@@ -86,6 +86,13 @@ public class FreeFlyCameraController : MonoBehaviour
     private Light flashlight;
     private AimIndicator aimIndicator;
     private TrajectoryPlannerController plannerController;
+    private TrajectoryFlowController flowController;
+
+    /// <summary>Подавить старую прямую телеоперацию кликом (движение — только через поток выбора).</summary>
+    public bool suppressDirectTeleop = true;
+
+    public Vector3 AimPointPublic => aimPoint;
+    public bool AimHitPublic => aimHitSurface;
 
     // Точка прицеливания (куда смотрит оператор) — на поверхности.
     private Vector3 aimPoint;
@@ -269,7 +276,8 @@ public class FreeFlyCameraController : MonoBehaviour
 
         CreateFlashlight();
         aimIndicator = gameObject.AddComponent<AimIndicator>(); // оракул достижимости (E1/E5)
-        plannerController = gameObject.AddComponent<TrajectoryPlannerController>(); // планировщик (E2–E5)
+        plannerController = gameObject.AddComponent<TrajectoryPlannerController>(); // планировщик (P/1-2-3/F9)
+        flowController = gameObject.AddComponent<TrajectoryFlowController>();       // поток «два лазера»
 
         if (enableCameraCollision)
         {
@@ -555,6 +563,19 @@ public class FreeFlyCameraController : MonoBehaviour
         // Планировщик траекторий (P — план, 1/2/3 — исполнить, F9 — автотест).
         if (plannerController != null)
             plannerController.UpdateAim(aimPoint, aimHitSurface);
+
+        // Поток выбора «два лазера»: красный (ЛКМ) — точка, зелёный (ПКМ) — траектория/фантом.
+        if (flowController != null)
+        {
+            bool redConfirm = Mouse.current != null
+                ? Mouse.current.leftButton.wasPressedThisFrame
+                : Input.GetMouseButtonDown(0);
+            bool greenConfirm = Mouse.current != null
+                ? Mouse.current.rightButton.wasPressedThisFrame
+                : Input.GetMouseButtonDown(1);
+            bool cancel = Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
+            flowController.UpdateAim(aimPoint, aimHitSurface, redConfirm, greenConfirm, cancel);
+        }
 
         if (leftHandEnabled) DrawHandLaser(leftLaser, -1f, leftHandOffset, leftColor);
         else if (leftLaser != null) leftLaser.enabled = false;

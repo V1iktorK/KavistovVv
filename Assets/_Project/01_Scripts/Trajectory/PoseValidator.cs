@@ -434,6 +434,65 @@ namespace TrajectoryCore
             return m;
         }
 
+        /// <summary>
+        /// Применить конфигурацию к КОПИИ робота (фантом): суставы копии берутся по именам,
+        /// соглашение то же (AngleAxis(q, q0·e) · q0), т.к. копия идентична в покое.
+        /// </summary>
+        public void ApplyToCopy(Transform[] copyJoints, double[] q)
+        {
+            if (!Ready || copyJoints == null || q == null) return;
+            int n = Mathf.Min(Mathf.Min(copyJoints.Length, q.Length), Dof);
+            for (int i = 0; i < n; i++)
+            {
+                if (copyJoints[i] == null) continue;
+                Vector3 u = (q0[i] * axes[i]).normalized;
+                copyJoints[i].localRotation = Quaternion.AngleAxis((float)q[i], u) * q0[i];
+            }
+        }
+
+        /// <summary>Найти суставы в иерархии копии (для фантомов).</summary>
+        public Transform[] FindCopyJoints(Transform copyRoot)
+        {
+            if (copyRoot == null) return new Transform[0];
+            var list = new List<Transform>();
+            for (int i = 1; i <= 6; i++)
+            {
+                Transform t = FindByName(copyRoot, "Axis" + i);
+                if (t != null) list.Add(t);
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// CCD только по подмножеству суставов [first..last] (например, доводка запястья 3..5,
+        /// когда позиционная часть уже решена аналитически). q меняется на месте.
+        /// </summary>
+        public bool SolveIkRange(Vector3 goal, double[] q, int first, int last,
+            int iterations = 60, float tolerance = 0.003f)
+        {
+            if (!Ready || q == null) return false;
+            first = Mathf.Clamp(first, 0, Dof - 1);
+            last = Mathf.Clamp(last, first, Dof - 1);
+
+            for (int it = 0; it < iterations; it++)
+            {
+                if ((TcpAt(q) - goal).magnitude <= tolerance) return true;
+                for (int i = last; i >= first; i--)
+                {
+                    Vector3 pivot = PivotAt(i, q);
+                    Vector3 axis = AxisWorld(i, q);
+                    Vector3 e = Vector3.ProjectOnPlane(TcpAt(q) - pivot, axis);
+                    Vector3 t = Vector3.ProjectOnPlane(goal - pivot, axis);
+                    if (e.sqrMagnitude < 1e-8f || t.sqrMagnitude < 1e-8f) continue;
+                    float ang = Mathf.Clamp(Vector3.SignedAngle(e, t, axis), -25f, 25f);
+                    double save = q[i];
+                    q[i] += ang;
+                    if (!WithinLimits(q)) q[i] = save;
+                }
+            }
+            return (TcpAt(q) - goal).magnitude <= tolerance * 3f;
+        }
+
         public bool WithinLimits(double[] q, float marginDeg = 0f)        {
             for (int i = 0; i < Dof; i++)
             {
