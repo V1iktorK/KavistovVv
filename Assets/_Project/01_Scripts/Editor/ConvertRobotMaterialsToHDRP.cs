@@ -222,7 +222,7 @@ public class ConvertRobotMaterialsToHDRP : EditorWindow
     public static void ConvertAllInScene()
     {
         int convertedCount = 0;
-        Renderer[] allRenderers = Object.FindObjectsOfType<Renderer>(true);
+        Renderer[] allRenderers = Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include);
         foreach (Renderer renderer in allRenderers)
         {
             Material[] mats = renderer.sharedMaterials;

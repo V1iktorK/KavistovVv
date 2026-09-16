@@ -1,39 +1,5 @@
 {
   "dependencies": {
-    "com.anklebreaker.unity-mcp": {
-      "version": "https://github.com/AnkleBreaker-Studio/unity-mcp-plugin.git",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {},
-      "hash": "9032874ff0b83a5941a01b2ab99599fcc61e90db"
-    },
-    "com.coplaydev.unity-mcp": {
-      "version": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {
-        "com.unity.modules.animation": "1.0.0",
-        "com.unity.modules.imageconversion": "1.0.0",
-        "com.unity.modules.physics": "1.0.0",
-        "com.unity.modules.physics2d": "1.0.0",
-        "com.unity.modules.uielements": "1.0.0",
-        "com.unity.modules.screencapture": "1.0.0",
-        "com.unity.modules.unitywebrequest": "1.0.0",
-        "com.unity.nuget.newtonsoft-json": "3.0.2",
-        "com.unity.test-framework": "1.1.31"
-      },
-      "hash": "4ce7dd3cc54e37e2ed6dc59cb5a047f3dccb3f50"
-    },
-    "com.gladekit.mcp-bridge": {
-      "version": "https://github.com/Glade-tool/glade-mcp-unity.git?path=/unity-bridge",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {
-        "com.unity.inputsystem": "1.0.0",
-        "com.unity.ai.navigation": "1.0.0"
-      },
-      "hash": "a1e34ce3aad57d812f6235d4bb36491a870988fb"
-    },
     "com.unity.2d.sprite": {
       "version": "1.0.0",
       "depth": 0,
@@ -50,15 +16,6 @@
         "com.unity.collections": "2.4.3",
         "com.unity.nuget.newtonsoft-json": "3.2.1",
         "com.unity.modules.imageconversion": "1.0.0"
-      },
-      "url": "https://packages.unity.com"
-    },
-    "com.unity.ai.navigation": {
-      "version": "2.0.14",
-      "depth": 1,
-      "source": "registry",
-      "dependencies": {
-        "com.unity.modules.ai": "1.0.0"
       },
       "url": "https://packages.unity.com"
     },

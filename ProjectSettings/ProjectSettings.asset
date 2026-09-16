@@ -12,8 +12,8 @@ PlayerSettings:
   targetDevice: 2
   useOnDemandResources: 0
   accelerometerFrequency: 60
-  companyName: KavistovVv
-  productName: KavistovVv
+  companyName: KazistovVv
+  productName: KazistovVv
   defaultCursor: {fileID: 0}
   cursorHotspot: {x: 0, y: 0}
   m_SplashScreenBackgroundColor: {r: 0.13725491, g: 0.12156863, b: 0.1254902, a: 1}
@@ -859,7 +859,7 @@ PlayerSettings:
     PS4: UNITY_POST_PROCESSING_STACK_V2
     PS5: UNITY_POST_PROCESSING_STACK_V2
     QNX: UNITY_POST_PROCESSING_STACK_V2
-    Standalone: APP_UI_EDITOR_ONLY;GLADE_CINEMACHINE;GLADE_INPUT_SYSTEM;GLADE_UGUI;OVR_DISABLE_HAND_PINCH_BUTTON_MAPPING;SENTIS_ANALYTICS_ENABLED;UNITY_POST_PROCESSING_STACK_V2;USE_INPUT_SYSTEM_POSE_CONTROL;USE_STICK_CONTROL_THUMBSTICKS
+    Standalone: APP_UI_EDITOR_ONLY;GLADE_CINEMACHINE;GLADE_INPUT_SYSTEM;GLADE_UGUI;OVR_DISABLE_HAND_PINCH_BUTTON_MAPPING;UNITY_POST_PROCESSING_STACK_V2;USE_INPUT_SYSTEM_POSE_CONTROL;USE_STICK_CONTROL_THUMBSTICKS;SENTIS_ANALYTICS_ENABLED
     VisionOS: UNITY_POST_PROCESSING_STACK_V2
     WebGL: UNITY_POST_PROCESSING_STACK_V2
     XboxOne: UNITY_POST_PROCESSING_STACK_V2
@@ -885,14 +885,14 @@ PlayerSettings:
   editorAssembliesCompatibilityLevel: 1
   m_RenderingPath: 1
   m_MobileRenderingPath: 1
-  metroPackageName: KavistovVv
+  metroPackageName: KazistovVv
   metroPackageVersion: 
   metroCertificatePath: 
   metroCertificatePassword: 
   metroCertificateSubject: 
   metroCertificateIssuer: 
   metroCertificateNotAfter: 0000000000000000
-  metroApplicationDescription: KavistovVv
+  metroApplicationDescription: KazistovVv
   wsaImages: {}
   metroTileShortName: 
   metroTileShowName: 0
@@ -966,7 +966,7 @@ PlayerSettings:
   cloudProjectId: f8d2e06d-2216-4f76-b7bb-8c1a72b7552a
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: KavistovVv
+  projectName: KazistovVv
   organizationId: milovanovv30
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0

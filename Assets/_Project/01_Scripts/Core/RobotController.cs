@@ -13,6 +13,10 @@ public class RobotController : MonoBehaviour
     [Range(0.1f, 5f)] public float maxSpeed = 1f;
     [HideInInspector] public bool isActive = false;
 
+    [Header("Скорость перемещения")]
+    [Tooltip("Общий множитель скорости всех роботов (0.34 ≈ в 3 раза медленнее стандартной)")]
+    public float movementSpeedScale = 0.34f;
+
     [Header("Industry 4.0 - Telemetry")]
     public bool telemetryEnabled = true;
     public float jointTemperature = 25f;
@@ -36,6 +40,11 @@ public class RobotController : MonoBehaviour
         targetPosition = transform.position;
         targetRotation = transform.rotation;
         ResolveKinematicReferences();
+
+        // Диагностика дубликатов: роботы в рантайме НЕ создаются (все — объекты MainScene).
+        // Если в PlayMode роботов больше двух/появился второй робот того же типа —
+        // это лишняя копия в открытой сцене (или копия, добавленная через UI).
+        RobotInventory.Guard(this);
     }
 
     /// <summary>Задать цель только по позиции (ориентация не меняется).</summary>
@@ -50,6 +59,17 @@ public class RobotController : MonoBehaviour
     {
         SetTarget(position);
         targetRotation = rotation;
+    }
+
+    /// <summary>
+    /// Сбросить цель: пока нет ПОДТВЕРЖДЁННОЙ позиции — робот не двигается
+    /// (критично для логики «два лазера»).
+    /// </summary>
+    public virtual void ClearTarget()
+    {
+        hasTarget = false;
+        targetPosition = tcp != null ? tcp.position : transform.position;
+        targetRotation = transform.rotation;
     }
 
     public virtual void MoveToTarget(float deltaTime)
@@ -123,6 +143,13 @@ public class RobotController : MonoBehaviour
         if (endEffector == null)
         {
             endEffector = FindDeepestDescendant(root);
+        }
+
+        // Если tcp не назначен в инспекторе — берём endEffector, чтобы
+        // телеметрия и телеоперация не падали с UnassignedReferenceException.
+        if (tcp == null)
+        {
+            tcp = endEffector;
         }
     }
 
@@ -234,5 +261,59 @@ public class RobotController : MonoBehaviour
         Vector3 reference = tcp != null ? tcp.position : transform.position;
         float movement = Vector3.Distance(reference, targetPosition);
         jointTemperature = Mathf.Lerp(jointTemperature, 25f + movement * 50f, deltaTime * 0.05f);
+    }
+}
+
+/// <summary>
+/// Учёт роботов сцены: в MainScene их ровно два — 6-осевой на стенде 1 и SCARA на стенде 2.
+/// Рантайм роботов не создаёт (создание возможно только явной командой оператора
+/// «Добавить робота» на верхней панели интерфейса → ObjectSpawner); этот класс только проверяет инвентарь
+/// и пишет предупреждение, если в PlayMode обнаружены дубликаты.
+/// </summary>
+public static class RobotInventory
+{
+    private static int awaited;        // сколько роботов Awake'нулось в текущем кадре
+    private static int loggedFrame = -1;
+
+    /// <summary>
+    /// Пауза проверки на время создания служебных копий (фантомы). Копия создаётся
+    /// «тихим» Instantiate: её `Awake` отрабатывает ДО того, как копии выставят
+    /// HideInHierarchy, поэтому проверка инвентаря видела «лишнего» робота и писала
+    /// ложное предупреждение «Роботов в сцене: 3» на каждое создание фантомов.
+    /// </summary>
+    public static bool Suppress;
+
+    /// <summary>Проверка инвентаря при появлении робота (вызывается из RobotController.Awake).</summary>
+    public static void Guard(RobotController self)
+    {
+        if (self == null || !Application.isPlaying) return;
+        if (Suppress) return;                    // идёт создание копии-фантома — это не робот сцены
+
+        int frame = Time.frameCount;
+        if (frame != loggedFrame) { loggedFrame = frame; awaited = 0; }
+        awaited++;
+
+        int total = 0, sixAxis = 0, scara = 0, other = 0;
+        foreach (RobotController rc in Object.FindObjectsByType<RobotController>(FindObjectsInactive.Include))
+        {
+            if (rc == null) continue;
+            // Фантомы (служебные копии) и копии, уже выставленные оператором через UI, — не сцена.
+            if ((rc.gameObject.hideFlags & HideFlags.HideInHierarchy) != 0) continue;
+            if (rc.GetComponent<KazistovVvUI.RegisteredObject>() != null) continue;
+            total++;
+            if (rc is SixAxisController) sixAxis++;
+            else if (rc is SCARAController) scara++;
+            else other++;
+        }
+
+        if (awaited < total) return;    // ждём, пока Awake'нутся все — иначе счёт неполный
+
+        if (total == 2 && sixAxis == 1 && scara == 1)
+            Debug.Log("[RobotInventory] Роботов в сцене: 2 (6-осевой + SCARA). Рантайм роботов не создаёт.");
+        else
+            Debug.LogWarning("[RobotInventory] Роботов в сцене: " + total +
+                " (6-осевых " + sixAxis + ", SCARA " + scara + ", прочих " + other +
+                ") — ожидается ровно 2: 6-осевой на стенде 1 и SCARA на стенде 2. " +
+                "Лишние объекты — копии в открытой сцене, а не работа рантайм-скриптов.");
     }
 }

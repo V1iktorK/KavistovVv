@@ -33,8 +33,14 @@ public class RobotSelfCollision : MonoBehaviour
 
     private readonly List<GameObject> spawnedColliders = new List<GameObject>();
 
-    private void Awake()
+    private void Start()
     {
+        if (jointTransforms == null || jointTransforms.Length == 0)
+        {
+            Debug.LogWarning("[RobotSelfCollision] jointTransforms is null or empty. Skipping collider setup.");
+            return;
+        }
+
         SetupColliders();
         SetupCollisionMatrix();
     }
@@ -67,11 +73,8 @@ public class RobotSelfCollision : MonoBehaviour
             spawnedColliders.Add(holder);
         }
 
-        // Коллайдер для всего робота (контейнер)
-        Collider baseCol = GetComponent<Collider>();
-        if (baseCol == null)
-            baseCol = gameObject.AddComponent<CapsuleCollider>();
-        baseCol.isTrigger = false;
+        // Не добавляем коллайдер на контейнер робота — используем только коллайдеры суставов
+    // для избежания конфликтов с существующими коллайдерами FBX
     }
 
     private void SetupCollisionMatrix()
