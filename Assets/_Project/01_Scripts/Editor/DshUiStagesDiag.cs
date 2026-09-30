@@ -52,7 +52,7 @@ public static class DshUiStagesDiag
         if (!SessionState.GetBool(SessionKey, false)) return;
         SessionState.SetBool(SessionKey, false);
         if (string.IsNullOrEmpty(reportPath))
-            reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+            reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         Application.logMessageReceived -= OnLog;
         Application.logMessageReceived += OnLog;
         Subscribe();
@@ -60,7 +60,7 @@ public static class DshUiStagesDiag
 
     public static void Run()
     {
-        reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+        reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         try { File.Delete(reportPath); } catch { }
         ok = 0; fail = 0; phase = 0; frames = 0; exceptions = 0;
 
@@ -138,7 +138,7 @@ public static class DshUiStagesDiag
     private static void Line(string text)
     {
         if (string.IsNullOrEmpty(reportPath))
-            reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+            reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         try { File.AppendAllText(reportPath, text + Environment.NewLine, Encoding.UTF8); } catch { }
     }
 
@@ -375,7 +375,8 @@ public static class DshUiStagesDiag
         Line("");
         Line("--- ВКЛАДКИ И ПЕРЕКЛЮЧАТЕЛИ НАСТРОЕК ---");
         ui.ShowSettings(0);
-        for (int tab = 0; tab < 5; tab++)
+        // Число вкладок — из KvSettingsView (с сессии 18.09.2026 добавлена вкладка «Графика»).
+        for (int tab = 0; tab < KvSettingsView.TabCount; tab++)
         {
             ui.SettingsView.SetTab(tab);
             Check(ui.SettingsView.ActiveTab == tab && ui.SettingsView.RowCount > 0,

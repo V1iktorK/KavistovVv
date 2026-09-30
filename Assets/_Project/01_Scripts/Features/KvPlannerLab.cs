@@ -118,6 +118,7 @@ namespace KazistovVvFeatures
         private LineRenderer treeLines;
         private Transform treeRoot;
         private int lastTreeVersion = -1;
+        private bool emptyTreeReported;    // ФИКС 4: «дерево пусто» сказано один раз на состояние
         private float treeTimer;
 
         public bool Running { get { return running; } }
@@ -423,8 +424,12 @@ namespace KazistovVvFeatures
         public void SetTreeVisible(bool value)
         {
             treeVisible = value;
+            // ФИКС 3: запрос запоминается СТАТИЧЕСКИ и применяется и к текущему планировщику,
+            // и к каждому следующему (при перепривязке робота поток создаёт новый Planner —
+            // раньше на нём запись дерева молча выключалась).
+            Planner.SetRecordTreeRequested(value);
             Planner planner = flow != null ? flow.Planner : null;
-            if (planner != null) Planner.RecordTree = value;
+            if (planner != null) planner.RecordTree = value;
             if (!value)
             {
                 if (treeRoot != null) treeRoot.gameObject.SetActive(false);
@@ -467,6 +472,36 @@ namespace KazistovVvFeatures
 
             treeLines.positionCount = pts.Count;
             if (pts.Count > 0) treeLines.SetPositions(pts.ToArray());
+
+            // ФИКС 4: пустое дерево — это НЕ «сломалось» и не повод оставить оператора
+            // перед пустым экраном. Причина и действие называются прямо (в сцене рисовать
+            // дерево нечего, поэтому сообщение идёт в строку состояния вкладки и в журнал).
+            // ФИКС 3: причин ровно три (см. TreeStatus), и каждая называется своей формулировкой.
+            if (pts.Count == 0)
+            {
+                if (!emptyTreeReported)
+                {
+                    emptyTreeReported = true;
+                    string why;
+                    if (planner.TreeVersion == 0 && !planner.TreeRecorded)
+                        why = "запись дерева не велась — включите показ дерева " +
+                              "(тумблер «Показывать дерево планировщика» или «Вид → Показать дерево»), " +
+                              "затем постройте траекторию";
+                    else if (!planner.TreeRecorded && planner.LastPathsFound > 0)
+                        why = "путь найден напрямую (без RRT), поэтому дерево не строилось — " +
+                              "это штатный результат, дерево появится на пути «через обход»";
+                    else if (planner.TreeVersion == 0)
+                        why = "после перепривязки робота дерево очищено: оно принадлежало прежнему роботу" +
+                              " · постройте траекторию заново (выберите точку и подтвердите)";
+                    else
+                        why = "планировщик ещё не записал дерево · постройте траекторию заново";
+                    Report(EmptyTreeText + " — узлов нет (" + why + ")");
+                }
+            }
+            else
+            {
+                emptyTreeReported = false;
+            }
         }
 
         private static void AddTree(List<Vector3> pts, PoseValidator v, List<double[]> nodes,
@@ -501,18 +536,63 @@ namespace KazistovVvFeatures
             }
         }
 
-        /// <summary>Строка состояния для вкладки.</summary>
+        /// <summary>
+        /// Строка состояния для вкладки.
+        /// ФИКС 4: пустое дерево (после перепривязки робота `TreeVersion = 0`) больше не
+        /// выглядит как «ничего нет» — оператор видит прямое указание, что делать.
+        /// </summary>
         public string Status()
         {
             Planner planner = flow != null ? flow.Planner : null;
-            string tree = planner != null
-                ? "дерево: узлов A " + planner.TreeNodesA.Count + " · B " + planner.TreeNodesB.Count +
-                  " · версия " + planner.TreeVersion
-                : "планировщик недоступен";
+            string tree = planner != null ? TreeStatus(planner) : "планировщик недоступен";
             if (running) return "прогон: " + cursor + "/" + totalTasks;
             if (results.Count > 0) return "последний прогон: " + results.Count + " стратегий · " + tree;
             return tree;
         }
+
+        /// <summary>
+        /// ФИКС 4. Короткий и честный статус дерева RRT: узлов, версия — а если дерево ПУСТО
+        /// (узлов нет вовсе или версия 0 после перепривязки робота), вместо пустого экрана
+        /// оператор получает «дерево пусто, выполните планирование».
+        ///
+        /// ФИКС 3 (этой сессии). Пустое дерево бывает по ТРЁМ разным причинам, и раньше все три
+        /// выглядели одинаково:
+        ///   1) показ дерева не включали — запись вообще не велась (`TreeRecorded == false`);
+        ///   2) путь найден НАПРЯМУЮ (`PlanToGoal`/`PlanViaWaypoint` — там дерево не записывается),
+        ///      поэтому узлов нет, хотя планирование прошло;
+        ///   3) дерево очищено при перепривязке робота (`TreeVersion == 0`).
+        /// Статус называет причину прямо — оператор видит, что делать, а не «пусто».
+        /// </summary>
+        public static string TreeStatus(Planner planner)
+        {
+            if (planner == null) return "планировщик недоступен";
+
+            int nodes = planner.TreeNodesA.Count + planner.TreeNodesB.Count;
+            if (nodes > 0 && planner.TreeVersion != 0)
+                return "дерево: узлов A " + planner.TreeNodesA.Count + " · B " +
+                       planner.TreeNodesB.Count + " · версия " + planner.TreeVersion +
+                       (planner.TreeSolved ? " · путь найден" : "");
+
+            if (planner.TreeVersion == 0 && !planner.TreeRecorded)
+                return EmptyTreeText + " — запись не велась: включите показ дерева планировщика";
+
+            if (!planner.TreeRecorded && planner.LastPathsFound > 0)
+                return DirectPathText;
+
+            return EmptyTreeText;
+        }
+
+        /// <summary>
+        /// ФИКС 3. Честная строка для случая «путь найден напрямую»: RRT в этом проходе не
+        /// строил дерево (режим обхода целиком в пространстве суставов), поэтому узлов нет —
+        /// это НЕ провал планирования и НЕ поломка визуализации.
+        /// </summary>
+        public const string DirectPathText =
+            "дерево не строилось — путь найден напрямую";
+
+        /// <summary>Текст для пустого дерева (одно место — им пользуются и вкладка, и оверлей).</summary>
+        public const string EmptyTreeText =
+            "дерево пусто, выполните планирование";
 
         private void Report(string text)
         {

@@ -201,6 +201,12 @@ namespace KazistovVvFeatures
                     Energy != null ? Energy.Model : null);
                 Energy.Bind(flow, Limits);
 
+                // ФИКС 2 (§20): планировщик параметризует время ТЕМ ЖЕ набором лимитов, что
+                // и постобработка (сглаживание / время-оптимальная / эко-профиль). Раньше он
+                // брал собственные `PoseValidator.VelMax` и не знал про ускорение и рывок —
+                // отсюда и расхождение времён «планировщик против постобработки».
+                if (flow.Planner != null) flow.Planner.MotionLimits = Limits;
+
                 if (tutorialOnLaunch && !KvTutorial.Completed) StartTutorial();
                 else if (KvTutorial.StartedNotFinished)
                     Debug.Log("[Stages2] туториал был начат и не закончен: шаг " +
@@ -760,6 +766,32 @@ namespace KazistovVvFeatures
                               (hub.Smoothing.Auto ? "включено" : "выключено"));
                 },
                 IsChecked = delegate { return hub.Smoothing != null && hub.Smoothing.Auto; }
+            });
+
+            // ФИКС 7. Стоимость автосглаживания: обрабатывать ОДИН выбранный вариант, а не все 8.
+            // По умолчанию выключено — прежнее поведение (все 8) сохраняется; выбор хранится
+            // в PlayerPrefs и виден галочкой в меню и тумблером на вкладке «Сглаживание».
+            KvCommands.Register(new KvCommand
+            {
+                Id = "post.auto.selected",
+                Title = "Сглаживать только выбранный вариант",
+                Description = "Вкл: автосглаживание обрабатывает один выбранный вариант вместо всех 8 " +
+                              "(появление траекторий быстрее). Выкл: прежнее поведение — все варианты",
+                Icon = "curve",
+                MenuPath = "Робот/Постобработка/Сглаживать только выбранный",
+                Execute = delegate
+                {
+                    if (hub.Smoothing == null) return;
+                    hub.Smoothing.AutoSelectedOnly = !hub.Smoothing.AutoSelectedOnly;
+                    Debug.Log("[Stages2] автосглаживание " +
+                              (hub.Smoothing.AutoSelectedOnly
+                                  ? "только выбранного варианта (быстрее)"
+                                  : "всех вариантов (как было)"));
+                },
+                IsChecked = delegate
+                {
+                    return hub.Smoothing != null && hub.Smoothing.AutoSelectedOnly;
+                }
             });
 
             Debug.Log("[Stages2] команды этапов 1–6 зарегистрированы · всего команд: " +

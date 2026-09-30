@@ -69,6 +69,18 @@ namespace KazistovVvFeatures
         /// <summary>Порог остановки провисания по угловой скорости, рад/с: |q̇| &lt; ε — движение прекратилось.</summary>
         private const double StopOmega = 0.001;
 
+        /// <summary>
+        /// ФИКС 8. Полоса МЯГКОГО подхода к упору, рад (≈1°): в её пределах шаг провисания
+        /// тормозится плавно, а не обрывается нулём в самый момент касания упора.
+        /// </summary>
+        private const double SoftStopBandRad = 0.0175;
+
+        /// <summary>ФИКС 8. Постоянная затухания «дребезга» в конце провисания, с.</summary>
+        private const double SettleTau = 0.35;
+
+        /// <summary>ФИКС 8. Сколько секунд держать порог |q̇| &lt; ε, чтобы признать остановку.</summary>
+        private const double StopHoldSeconds = 0.15;
+
         public event Action<string> Message;
 
         private TrajectoryFlowController flow;
@@ -94,6 +106,12 @@ namespace KazistovVvFeatures
         private bool droopStopReported;     // строка «провисание остановилось» уже сказана
         private double heldAngle;           // угол, на котором «замерла» обесточенная ось
         private bool holding;               // удерживаем угол (потеря управления или тормоз)
+
+        // --- ФИКС 8: поза ОСТАЛЬНЫХ суставов и плавное затухание в конце провисания ---
+        private double[] frozenPose;        // поза ВСЕХ осей в момент отказа (остальные — фиксированы)
+        private double frozenTorque;        // момент веса в этой позе, Н·м (для отчёта)
+        private double stopHold;            // сколько секунд скорость держится ниже порога
+        private double settleFactor = 1.0;  // множитель плавного затухания (1 → 0 в конце)
 
         /// <summary>
         /// Приведённый момент инерции distal-части (звеньев после отказавшего сустава вместе
@@ -225,9 +243,18 @@ namespace KazistovVvFeatures
             droopStopReported = false;
             holding = jointMode != KvJointFailureMode.Droop;
             lastReport = "";
+            stopHold = 0.0;
+            settleFactor = 1.0;
 
             double[] q = flow.Validator.CopyCurrent();
             heldAngle = joint >= 0 && joint < q.Length ? q[joint] : 0.0;
+
+            // ФИКС 8. Поза ОСТАЛЬНЫХ суставов запоминается и далее считается ФИКСИРОВАННОЙ:
+            // провисает только отказавшая ось, а вклад остальных в момент веса пересчитывается
+            // на каждом шаге по этой замороженной позе (раньше момент брался от «текущей» позы
+            // робота, которая могла меняться по другим осям — и модель «плыла»).
+            frozenPose = q != null ? (double[])q.Clone() : null;
+            frozenTorque = GravityTorque(frozenPose, joint);
 
             switch (jointMode)
             {
@@ -269,6 +296,12 @@ namespace KazistovVvFeatures
             holding = false;
             heldAngle = 0.0;
             lastReport = "";
+
+            // ФИКС 8: снимок позы остальных суставов и плавное затухание тоже сбрасываются.
+            frozenPose = null;
+            frozenTorque = 0.0;
+            stopHold = 0.0;
+            settleFactor = 1.0;
 
             if (announce)
             {
@@ -312,7 +345,7 @@ namespace KazistovVvFeatures
         }
 
         /// <summary>
-        /// ПРОВИСАНИЕ ПО МОДЕЛИ МАЯТНИКА С ВЯЗКИМ ТРЕНИЕМ (ФИКС 11.А).
+        /// ПРОВИСАНИЕ ПО МОДЕЛИ МАЯТНИКА С ВЯЗКИМ ТРЕНИЕМ (ФИКС 11.А, уточнено в ФИКСЕ 8).
         ///
         /// Момент силы тяжести τ берётся у штатной модели нагрузки
         /// (`KvPayloadCalculator.JointTorques`): вес звеньев в своих центрах плюс вес груза
@@ -320,14 +353,29 @@ namespace KazistovVvFeatures
         /// направление, куда вес тянет звено, получается само, без «угадывания» знака.
         /// Дальше интегрируется уравнение маятника с вязким трением:
         ///     q̇ += (τ − k_d · q̇) / I · dt,   q += q̇ · dt
-        /// Провисание ограничено упорами сустава (в первую очередь нижним), а при |q̇| &lt; ε
-        /// считается остановившимся: либо звено пришло в равновесие (груз строго под осью),
-        /// либо упёрлось в упор. Предел скорости из ползунка «Скорость провисания» сохранён —
-        /// он не даёт модели разгонять звено быстрее, чем было видно раньше.
+        ///
+        /// ФИКС 8 — ДВА УТОЧНЕНИЯ МОДЕЛИ:
+        ///   1) ПОЗА ОСТАЛЬНЫХ СУСТАВОВ. Провисает ровно одна ось; остальные считаются
+        ///      ЗАФИКСИРОВАННЫМИ в позе отказа, но их ВКЛАД В МОМЕНТ пересчитывается на
+        ///      каждом шаге (момент берётся от позы «замороженные остальные + текущий угол
+        ///      отказавшей оси»), поэтому по мере провисания плечо и момент меняются честно.
+        ///   2) ПЛАВНОЕ ЗАТУХАНИЕ В КОНЦЕ. Раньше движение обрывалось условием |q̇| &lt; ε.
+        ///      Теперь в полосе ≈1° перед упором ход плавно тормозится (smoothstep), а когда
+        ///      момент веса перестаёт разгонять ось в сторону движения, остаточная скорость
+        ///      гасится экспоненциально (τ ≈ 0.35 с). Остановка признаётся только если порог
+        ///      держится `StopHoldSeconds` — без «мигания» состояния.
+        ///
+        /// Предел скорости из ползунка «Скорость провисания» сохранён — он не даёт модели
+        /// разгонять звено быстрее, чем было видно раньше. Это по-прежнему УПРОЩЁННАЯ МОДЕЛЬ,
+        /// а не физический движок (см. помету на вкладке «Имитация отказов»).
         /// </summary>
         private void TickPendulumDroop(PoseValidator v, double[] q, float deltaTime)
         {
-            float torque = GravityTorque(q, joint);
+            // Поза модели: остальные оси заморожены, отказавшая — текущая.
+            double[] pose = PoseForDroop(v, q);
+            double current = pose != null && joint >= 0 && joint < pose.Length ? pose[joint] : q[joint];
+
+            float torque = GravityTorque(pose, joint);
             if (float.IsNaN(torque))
             {
                 // Модель нагрузки недоступна — остаётся прежнее поведение: провисание
@@ -345,38 +393,66 @@ namespace KazistovVvFeatures
 
             double lower = v.Lower[joint];
             double upper = v.Upper[joint];
-            double next = q[joint] + omega * deltaTime;
-            bool stopped;
-            if (next <= lower)
+            double next = current + omega * deltaTime;
+
+            // 1) МЯГКИЙ ПОДХОД К УПОРУ: в полосе ~1° ход плавно тормозится, поэтому звено
+            //    «доезжает» до упора, а не щёлкает в него.
+            bool nearLower = omega < 0.0 && next - lower < SoftStopBandRad;
+            bool nearUpper = omega > 0.0 && upper - next < SoftStopBandRad;
+            if (nearLower || nearUpper)
             {
-                next = lower;                                  // нижний упор сустава
-                omega = 0.0;
-                stopped = true;
-            }
-            else if (next >= upper)
-            {
-                next = upper;                                  // верхний упор сустава
-                omega = 0.0;
-                stopped = true;
-            }
-            else
-            {
-                stopped = Math.Abs(omega) < StopOmega;          // равновесие: движение прекратилось
-                if (stopped) omega = 0.0;
+                double gap = nearLower ? next - lower : upper - next;
+                double k = Mathf.Clamp01((float)(gap / SoftStopBandRad));
+                settleFactor = k * k * (3.0 - 2.0 * k);        // smoothstep: 1 → 0 у упора
+                omega *= settleFactor;
+                next = current + omega * deltaTime;
             }
 
-            droopOmega = omega;
+            // 2) ПЛАВНОЕ ЗАТУХАНИЕ ОСТАТКА: момент веса больше не разгоняет ось в сторону
+            //    её движения (звено прошло низ и тормозит) — скорость гасится экспоненциально.
+            if (torque * omega < 0.0) omega /= 1.0 + deltaTime / SettleTau;
+
+            if (next <= lower) { next = lower; omega = 0.0; }
+            else if (next >= upper) { next = upper; omega = 0.0; }
+
+            stopHold = Math.Abs(omega) < StopOmega ? stopHold + deltaTime : 0.0;
+            bool stopped = stopHold >= StopHoldSeconds;
+            if (stopped) omega = 0.0;
             droopStopped = stopped;
-            q[joint] = next;
-            v.Apply(v.ContinueFrom(v.CopyCurrent(), q));
+
+            droopOmega = omega;
+            pose[joint] = next;
+            v.Apply(v.ContinueFrom(v.CopyCurrent(), pose));
 
             if (stopped && !droopStopReported)
             {
                 droopStopReported = true;
                 Log(KvLogKind.Warning, "сустав " + (joint + 1) + ": провисание остановилось на " +
                                        (next * Mathf.Rad2Deg).ToString("0.0") +
-                                       "° (равновесие или упор сустава)");
+                                       "° (равновесие или упор сустава) · остальные оси " +
+                                       "зафиксированы в позе отказа, момент пересчитан: " +
+                                       TorqueText(frozenTorque) + " → " + TorqueText(torque) + " Н·м");
             }
+        }
+
+        /// <summary>Момент для журнала: «н/д» вместо NaN, если модель нагрузки недоступна.</summary>
+        private static string TorqueText(double torque)
+        {
+            return double.IsNaN(torque) ? "н/д" : torque.ToString("0.0");
+        }
+
+        /// <summary>
+        /// ФИКС 8. Поза для модели провисания: ВСЕ оси, кроме отказавшей, берутся из снимка
+        /// момента отказа (`frozenPose`) и считаются неподвижными; отказавшая ось — текущая.
+        /// Если снимка нет (модель нагрузки недоступна), возвращается текущая поза робота.
+        /// </summary>
+        private double[] PoseForDroop(PoseValidator v, double[] current)
+        {
+            if (frozenPose == null || current == null || frozenPose.Length != current.Length)
+                return current;
+            double[] pose = (double[])frozenPose.Clone();
+            if (joint >= 0 && joint < pose.Length) pose[joint] = current[joint];
+            return pose;
         }
 
         /// <summary>Короткая подпись состояния провисания для статуса вкладки.</summary>
@@ -417,16 +493,24 @@ namespace KazistovVvFeatures
 
         /// <summary>
         /// Призматическая ось (SCARA): маятника у неё нет — каретка под весом руки опускается
-        /// с заданной скоростью до нижнего упора (поведение сохранено без изменений).
+        /// до нижнего упора. ФИКС 8: остальные оси берутся из позы отказа и считаются
+        /// неподвижными (раньше в расчёт попадала «текущая» поза робота целиком).
         /// </summary>
         private void TickPrismaticDroop(PoseValidator v, double[] q, float deltaTime)
         {
-            double step = droopRateDeg * 0.001f * deltaTime;
-            q[joint] = Math.Max(v.Lower[joint], q[joint] - step);
-            droopOmega = -droopRateDeg * 0.001f;
-            droopStopped = q[joint] <= v.Lower[joint] + 1e-9;
+            double[] pose = PoseForDroop(v, q);
+            double current = pose != null && joint >= 0 && joint < pose.Length ? pose[joint] : q[joint];
 
-            v.Apply(v.ContinueFrom(v.CopyCurrent(), q));
+            double step = droopRateDeg * 0.001f * deltaTime;
+            double next = Math.Max(v.Lower[joint], current - step);
+            droopOmega = -droopRateDeg * 0.001f;
+
+            stopHold = Math.Abs(next - v.Lower[joint]) < 1e-6 ? stopHold + deltaTime : 0.0;
+            droopStopped = stopHold >= StopHoldSeconds;
+            if (droopStopped) droopOmega = 0.0;
+
+            pose[joint] = next;
+            v.Apply(v.ContinueFrom(v.CopyCurrent(), pose));
         }
 
         /// <summary>
@@ -696,6 +780,12 @@ namespace KazistovVvFeatures
             return points.ToArray();
         }
 
+        /// <summary>
+        /// ФИКС 9. Подпись источников «человека» для отчёта проверки: сколько точек учтено
+        /// и вошли ли в них манекены (ставит хаб этапов 13–36).
+        /// </summary>
+        public string PersonSourceNote { get; set; }
+
         // ------------------------------------------------------------------ проверка
 
         public List<KvFinding> Validate()
@@ -813,10 +903,17 @@ namespace KazistovVvFeatures
         private void CheckPerson(PoseValidator v, TrajectoryCandidate candidate)
         {
             Vector3[] people = People();
+            // ФИКС 9: в отчёте прямо сказано, СКОЛЬКО точек человека проверено и вошли ли
+            // манекены — иначе «человека нет в зоне» звучит как «людей рядом нет», хотя
+            // проверка просто не знала о них.
+            string sources = string.IsNullOrEmpty(PersonSourceNote)
+                ? ""
+                : " · " + PersonSourceNote;
             if (people.Length == 0)
             {
                 Add(KvSeverity.Info, "человек в зоне не определён",
-                    "нет точки наблюдателя (шлем/камера не найдены) — проверка близости пропущена",
+                    "нет точки наблюдателя (шлем/камера не найдены) — проверка близости пропущена" +
+                    sources,
                     false, false);
                 return;
             }
@@ -862,11 +959,12 @@ namespace KazistovVvFeatures
             if (closestPersonDistance == float.MaxValue)
             {
                 Add(KvSeverity.Info, "расстояние до человека не посчитано",
-                    "проверено сэмплов: " + evaluated, false, false);
+                    "проверено сэмплов: " + evaluated + sources, false, false);
                 return;
             }
 
-            string text = closestPersonDistance.ToString("0.00") + " м (" + worstWhere + ")";
+            string text = closestPersonDistance.ToString("0.00") + " м (" + worstWhere + ")" +
+                          " · точек человека в проверке: " + people.Length + sources;
             if (closestPersonDistance < PersonCriticalDistance)
                 Add(KvSeverity.Critical, "траектория проходит близко к человеку", text, false, true);
             else if (closestPersonDistance < PersonWarningDistance)
@@ -1312,13 +1410,15 @@ namespace KazistovVvFeatures
             kit.Note(T("fail.info",
                 "Отказ сустава: момент веса звеньев и груза берётся у штатной модели нагрузки, а звено " +
                 "провисает по модели МАЯТНИКА С ВЯЗКИМ ТРЕНИЕМ — скорость набирается по τ/I, тормозится " +
-                "трением k_d и останавливается на упоре или в равновесии (поля inertiaKgM2 и " +
-                "viscousFriction). Это по-прежнему НЕ физический движок: динамика Ньютона–Эйлера, трение " +
-                "в редукторах и упругость звеньев не считаются. «Потеря управления» — ось обесточена, её " +
-                "цель игнорируется, робот работает остальными осями; «с фиксацией» — тормоз сработал, угол " +
-                "заморожен до сброса аварии. Потеря связи блокирует команды и останавливает движение, " +
-                "перегрузка увеличивает массу груза и останавливает робота. После любого отказа нужен " +
-                "«Сброс аварии» и переезд домой."), KvTheme.TextDim);
+                "трением k_d и плавно затухает у упора или в равновесии (поля inertiaKgM2 и " +
+                "viscousFriction). Поза ОСТАЛЬНЫХ суставов считается зафиксированной в момент отказа, " +
+                "но их вклад в момент пересчитывается на каждом шаге. Это по-прежнему УПРОЩЁННАЯ МОДЕЛЬ, " +
+                "а НЕ физический движок: динамика Ньютона–Эйлера, трение в редукторах, люфты и упругость " +
+                "звеньев не считаются. «Потеря управления» — ось обесточена, её цель игнорируется, робот " +
+                "работает остальными осями; «с фиксацией» — тормоз сработал, угол заморожен до сброса " +
+                "аварии. Потеря связи блокирует команды и останавливает движение, перегрузка увеличивает " +
+                "массу груза и останавливает робота. После любого отказа нужен «Сброс аварии» и переезд " +
+                "домой."), KvTheme.TextDim);
         }
 
         public void Tick() { }
@@ -1330,16 +1430,18 @@ namespace KazistovVvFeatures
         }
     }
 
-    /// <summary>ВКЛАДКА «ПРОВЕРКА ПЕРЕД ПУСКОМ» (ЭТАП 35 ТЗ).</summary>
+    /// <summary>ВКЛАДКА «ПРОВЕРКА ПЕРЕД ПУСКОМ» (ЭТАП 35 ТЗ; ФИКС 9 — манекены).</summary>
     public class KvValidateTab : IKvWorkbenchTab
     {
         private readonly KvPreRunValidator validator;
         private readonly Func<bool> startAction;
+        private readonly KvMannequins mannequins;
 
-        public KvValidateTab(KvPreRunValidator preRun, Func<bool> start)
+        public KvValidateTab(KvPreRunValidator preRun, Func<bool> start, KvMannequins mannequinsService = null)
         {
             validator = preRun;
             startAction = start;
+            mannequins = mannequinsService;
         }
 
         public string Key { get { return "validate"; } }
@@ -1404,6 +1506,29 @@ namespace KazistovVvFeatures
                     KvFinding finding = validator.Findings[index];
                     return finding.Describe();
                 }, KvTheme.TextMain);
+            }
+
+            // ФИКС 9: манекены рядом с рабочей зоной. Переключатель по умолчанию ВКЛЮЧЁН —
+            // проверка видит и оператора, и манекенов. Ползунок переставляет их от робота.
+            if (mannequins != null)
+            {
+                kit.Divider();
+                kit.Section(T("valid.mannequins", "Манекены в зоне"));
+                kit.Toggle(T("valid.mannequins.include", "Учитывать манекены в проверке"),
+                    mannequins.Include, delegate (bool v)
+                    {
+                        mannequins.Include = v;
+                        validator.PersonSourceNote = mannequins.SourceNote();
+                    });
+                kit.Slider(T("valid.mannequins.distance", "Вынос манекенов от робота, м"),
+                    0.5f, 4f, mannequins.Distance, "0.0",
+                    delegate (float v) { mannequins.Distance = v; });
+                kit.Info(delegate { return mannequins.Status(); }, KvTheme.TextDim);
+                kit.Note(T("valid.mannequins.note",
+                    "Два манекена (простые капсулы, коллайдер-триггер) стоят на полу рядом с рабочей " +
+                    "зоной: 1.5 м в сторону от робота и 1.5 м в сторону прохода между стендами. " +
+                    "Они скрыты в дереве иерархии; переставлять — ползунком выше. Манекены " +
+                    "учитываются вместе с оператором (камера/шлем)."), KvTheme.TextDim);
             }
 
             kit.Note(T("valid.info",

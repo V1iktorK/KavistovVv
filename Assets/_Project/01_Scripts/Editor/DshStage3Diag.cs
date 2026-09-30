@@ -31,7 +31,7 @@ public static class DshStage3Diag
 
     public static void Run()
     {
-        report = Path.Combine(Application.dataPath, "..", "_dsh_s3_verify.txt");
+        report = FeatureStorage.ReportPath("_dsh_s3_verify.txt");
         try
         {
             File.WriteAllText(report,

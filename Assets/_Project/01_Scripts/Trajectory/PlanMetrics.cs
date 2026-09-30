@@ -69,7 +69,9 @@ public class PlanMetrics : MonoBehaviour
     public void SaveCsv()
     {
         if (rows.Count == 0) return;
-        string path = System.IO.Path.Combine(Application.persistentDataPath, "plan_metrics.csv");
+        // ФИКС 11: файл метрик — отчётный, поэтому идёт в ЕДИНЫЙ каталог отчётов
+        // (<persistentDataPath>/KazistovVv/Reports), а не в корень persistentDataPath.
+        string path = KazistovVvFeatures.FeatureStorage.ReportPath("plan_metrics.csv");
         System.IO.File.WriteAllLines(path, rows.ToArray());
         Debug.Log("[Metrics] CSV: " + path);
     }

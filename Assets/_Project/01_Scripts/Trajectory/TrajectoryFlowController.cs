@@ -143,7 +143,8 @@ public class TrajectoryFlowController : MonoBehaviour
     [Tooltip("Допуск совпадения оси инструмента с нормалью поверхности, градусы (для шага 3).")]
     public float alignAngleToleranceDeg = 6f;
     [Tooltip("Диагностика отказов по точке: точное значение toolOffset и координаты пишутся в консоль " +
-             "и в файл _dsh_offset_diag.txt в корне проекта (подсказка для шага 2/3).")]
+             "и в файл _dsh_offset_diag.txt в каталоге отчётов (<persistentDataPath>/KazistovVv/Reports, " +
+             "ФИКС 10 — не в папке проекта) — подсказка для шага 2/3.")]
     public bool logOffsetDiagnostics = true;
 
     /// <summary>Как смещается выбранная точка: вдоль нормали поверхности (основное) или вверх по Y (хак).</summary>
@@ -588,6 +589,12 @@ public class TrajectoryFlowController : MonoBehaviour
 
         lasers.UpdateRays(aimPoint, aimHit);
 
+        // ФИКС 4 (§22): ОТМЕНА (Esc) обрабатывается ДО проверки «робот найден прицелом».
+        // Раньше при не выбранном роботе управление уходило в ранний возврат ниже, и Esc
+        // не доходил до ResetAll — фантомы и визуал траекторий оставались в сцене.
+        // Логика сброса не менялась: тот же ResetAll, что и раньше.
+        if (cancel) { ResetAll("Сброшено (Esc)"); return; }
+
         if (robot == null)
         {
             if (confirm) Report("Наведите шарик лазера на робота и нажмите F", Palette.Warn);
@@ -601,8 +608,6 @@ public class TrajectoryFlowController : MonoBehaviour
         if (worldTimer <= 0f) { world.Rebuild(robot, 0.06f); worldTimer = 0.5f; }
         gate.NotifyState();
         LogTcpFrameOnce();
-
-        if (cancel) { ResetAll("Сброшено (Esc)"); return; }
 
         // До этапа 4 ни один робот не должен двигаться сам (в т.ч. второй стенд).
         if (state.phase != FlowState.RobotMoving) HoldAllRobots();
@@ -1413,7 +1418,20 @@ public class TrajectoryFlowController : MonoBehaviour
         if (state.candidates.Count == 0)
         {
             state.phase = FlowState.Idle;
-            Report("Выберите другую точку — траектория не найдена", Palette.Bad);
+            // ФИКС 6: у SCARA причина отказа почти всегда одна и та же — точка лежит РОВНО
+            // на уровне столешницы, то есть призма стоит в самом низу хода (запас 0°), а
+            // планировщику нужно ≥ 3°. Оператор получает не «точка не найдена», а прямое
+            // объяснение с числами и подсказкой. Геометрия SCARA при этом НЕ «чинится».
+            string prismHint = PrismLowerLimitHint(planningTarget);
+            if (prismHint != null)
+            {
+                Report(prismHint, Palette.Bad);
+                Debug.LogWarning("[SCARA] " + prismHint);
+            }
+            else
+            {
+                Report("Выберите другую точку — траектория не найдена", Palette.Bad);
+            }
             LogPlanFailure();
             return;
         }
@@ -1449,6 +1467,41 @@ public class TrajectoryFlowController : MonoBehaviour
                " · зелёным лучом (X) наведите на траекторию и нажмите ЛКМ" +
                " · Enter — режим перемещения точки",
                unique >= MaxTrajectories && phantomOk ? Palette.Info : Palette.Warn);
+    }
+
+    /// <summary>
+    /// ФИКС 6. Понятное объяснение для случая «точка ровно на столешнице»: у SCARA ход
+    /// призмы z_5 заканчивается на уровне стола, поэтому такая точка даёт запас 0° до
+    /// нижнего предела, а планировщику нужно ≥ 3° (иначе SafetyGate отклоняет путь).
+    /// Возвращает null, если случай не тот (робот не SCARA, IK не сошлась, запас достаточен).
+    ///
+    /// Числа берутся фактически: запас считается штатным `LimitMargin` (у призмы полный
+    /// ход = 360°, см. `PoseValidator.LimitMargin`), порог — `Planner.minLimitMarginDeg`.
+    /// </summary>
+    private string PrismLowerLimitHint(Vector3 target)
+    {
+        if (validator == null || !validator.Ready) return null;
+        if (validator.Dof != 3 || !validator.IsPrismatic(2)) return null;   // только SCARA
+        if (!oracle.Ready) return null;
+
+        double[] q;
+        if (!validator.SolveIk(target, validator.CopyCurrent(), out q, 160) || q == null) return null;
+
+        double lo = validator.Lower[2];
+        double range = validator.Upper[2] - lo;
+        if (range <= 1e-4) return null;
+
+        float margin = validator.LimitMargin(q);
+        bool atBottom = q[2] <= lo + 1e-4;
+        int marginDeg = Mathf.Max(0, Mathf.RoundToInt(margin));
+        if (!atBottom && marginDeg >= Mathf.RoundToInt(planner.minLimitMarginDeg)) return null;
+
+        string where = atBottom || marginDeg <= 0
+            ? "Точка на уровне столешницы"
+            : "Точка у нижнего предела призмы";
+        return where + " · запас до нижнего предела призмы " + marginDeg + "° < " +
+               planner.minLimitMarginDeg.ToString("0") + "° требуемых · " +
+               "выберите точку на 5–10 см выше";
     }
 
     /// <summary>
@@ -2125,7 +2178,12 @@ public class TrajectoryFlowController : MonoBehaviour
         WriteOffsetDiag(line);
     }
 
-    /// <summary>Запись строки диагностики в `_dsh_offset_diag.txt` (не чаще раза в секунду).</summary>
+    /// <summary>
+    /// Запись строки диагностики в файл `_dsh_offset_diag.txt` (не чаще раза в секунду).
+    /// ФИКС 10: файл лежит в `Application.persistentDataPath/KazistovVv/Reports`, а НЕ в корне
+    /// проекта — проект находится в OneDrive, и во время PlayMode файл там не дописывался
+    /// (§13.11): диагностика отказа по точке терялась.
+    /// </summary>
     private void WriteOffsetDiag(string line)
     {
         if (!logOffsetDiagnostics) return;
@@ -2133,7 +2191,7 @@ public class TrajectoryFlowController : MonoBehaviour
         lastOffsetDiagTime = Time.realtimeSinceStartup;
         try
         {
-            string path = System.IO.Path.Combine(Application.dataPath, "..", "_dsh_offset_diag.txt");
+            string path = KazistovVvFeatures.FeatureStorage.ReportPath("_dsh_offset_diag.txt");
             System.IO.File.AppendAllText(path,
                 System.DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss") + " " + line + System.Environment.NewLine);
         }
@@ -2201,9 +2259,20 @@ public class TrajectoryFlowController : MonoBehaviour
         planner.maxIterations = 700;
         oracle.Init(robot, world);
         gate.NotifyState();
+        // ФИКС 4 (§22): при ПЕРЕПРИВЯЗКЕ робота (Rebind — смена робота прицелом/деревом)
+        // фантомы СТАРОГО робота обязаны исчезнуть. Раньше здесь стоял только Init(),
+        // который лишь перенастраивает менеджер (template/validator/контейнер) и НЕ трогает
+        // уже созданные копии, — 8 фантомов прежнего робота оставались висеть в сцене.
+        // Логика фантомов не менялась: это тот же штатный ClearPhantoms (полная уборка,
+        // тот же вызов, что и при Esc / новой точке).
+        phantoms.ClearPhantoms();
         phantoms.Init(robot, validator);
         robot.ClearTarget();
         tcpFrameDiagPending = logTcpFrame;      // разовая диагностика осей TCP после привязки
+        // ФИКС 4: дерево RRT принадлежало ПРЕЖНЕМУ роботу — при перепривязке оно
+        // ОЧИЩАЕТСЯ и версия сбрасывается в 0, иначе оператор видел бы «чужое» дерево
+        // (или пустой экран без объяснения). Планировщик при этом не менялся.
+        planner.ClearTreeRecording();
         // ЗАДАЧИ 3–4 ТЗ: зона достижимости строится по обоим роботам сцены, индикаторы
         // лимитов — по активному; при смене робота индикаторы пересобираются.
         if (viz != null)
@@ -2211,6 +2280,23 @@ public class TrajectoryFlowController : MonoBehaviour
             viz.oracleZoneRadius = oracle.workZoneRadius;
             viz.Bind(robot);
         }
+    }
+
+    /// <summary>
+    /// ФИКС 5/6: «Пересчитать кинематику SCARA» — явный запрос оператора. Заново снимает
+    /// геометрию робота (пределы хода призмы, сдвиг нижней границы) и перепривязывает поток
+    /// к тому же роботу. Вызывается ТОЛЬКО командой: сам по себе пересчёт не запускается
+    /// (это тяжёлая операция, и пределы хода не должны «плавать» между кадрами).
+    /// </summary>
+    public void RebindKinematics(string why = "пересчёт кинематики")
+    {
+        if (robot == null) return;
+        SCARAController scara = robot as SCARAController;
+        if (scara != null) scara.RecalculateKinematics();
+        Rebind();
+        Debug.Log("[SCARA] " + why + ": геометрия и ход Z пересчитаны · ZMin = " +
+                  (scara != null ? scara.ZMin.ToString("0.000") : "—") + " · ZMax = " +
+                  (scara != null ? scara.ZMax.ToString("0.000") : "—"));
     }
 
     /// <summary>

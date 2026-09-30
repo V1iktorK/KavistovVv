@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using KazistovVvFeatures;
 
 namespace TrajectoryCore
 {
@@ -62,6 +63,15 @@ namespace TrajectoryCore
         public float timeStep = 0.02f;      // шаг сэмплирования траектории
         public float accelShare = 0.25f;    // доля времени на разгон/торможение
 
+        /// <summary>
+        /// ФИКС 2 (§20). НАБОР ЛИМИТОВ ДВИЖЕНИЯ планировщика — тот же объект, что у
+        /// постобработки (сглаживание / время-оптимальная / эко-профиль, см. `KvStageHub2.Limits`),
+        /// поэтому время планировщика и время постобработки считаются по ОДНИМ пределам
+        /// и совпадают. По умолчанию — типовые значения `KvMotionLimits` (90 °/с / 180 °/с² /
+        /// 1200 °/с³), если хаб этапов не привязал общий набор.
+        /// </summary>
+        public KvMotionLimits MotionLimits { get; set; } = new KvMotionLimits();
+
         // Веса скоринга
         public double wTime = 1.0, wLength = 0.6, wClearance = 2.0, wLimit = 0.5, wSigma = 0.5;
         public double wPosture = 0.05;      // вклад стоимости позы (PostureSelector)
@@ -81,6 +91,9 @@ namespace TrajectoryCore
         {
             v = validator;
             world = collisionWorld;
+            // ФИКС 3: новый планировщик сразу подхватывает последний запрос показа дерева —
+            // иначе после перепривязки робота показ оставался включён, а узлы не записывались.
+            RecordTree = RecordTreeRequested;
             Ready = v != null && v.Ready && world != null;
             if (!Ready) return;
             ranges = new double[v.Dof];
@@ -130,6 +143,7 @@ namespace TrajectoryCore
             }
             LastDebug = "IK-решений=" + goals.Count + ", путей=" + pathsFound +
                         ", отброшено по коллизии=" + filteredOut + ", кандидатов=" + result.Count;
+            LastPathsFound = pathsFound;
 
             // 3. Скоринг и отбор.
             foreach (PlannedTrajectory t in result) t.Score = Score(t);
@@ -367,8 +381,32 @@ namespace TrajectoryCore
         // только копируются в списки, чтобы их можно было нарисовать. Каждый вызов
         // PlanBiRrt начинает новую запись, поэтому видно текущее (последнее) дерево.
 
-        /// <summary>Включить запись дерева (ставит визуализатор этапа 15).</summary>
-        public static bool RecordTree;
+        /// <summary>
+        /// Включить запись дерева (ставит визуализатор этапа 15).
+        ///
+        /// ФИКС 3 (сессия §19). Раньше это было СТАТИЧЕСКОЕ поле, а флаг ставил визуализатор
+        /// у ТОГО планировщика, который был у потока В ТОТ МОМЕНТ. При любой перепривязке робота
+        /// поток создаёт НОВЫЙ `Planner` (`RebindKinematics`, смена робота) — и на новом объекте
+        /// запись уже не велась, хотя тумблер «Показывать дерево планировщика» оставался включён.
+        /// Отсюда «версия 0 · узлов A/B: 0/0» при живом показе дерева. Теперь поле — СВОЙСТВО
+        /// объекта, а последнее выставленное ЗНАЧЕНИЕ запоминается статически
+        /// (<see cref="RecordTreeRequested"/>) и применяется к каждому новому планировщику
+        /// (<see cref="Init"/>). Алгоритм планирования не меняется: флаг только копирует узлы.
+        /// </summary>
+        public bool RecordTree { get; set; }
+
+        /// <summary>
+        /// Последнее значение, выставленное визуализатором (`KvPlannerLab.SetTreeVisible`).
+        /// Новый планировщик получает его в <see cref="Init"/>, поэтому показ дерева не теряется
+        /// при перепривязке робота.
+        /// </summary>
+        public static bool RecordTreeRequested { get; private set; }
+
+        /// <summary>Запомнить запрос показа дерева (вызывает визуализатор этапа 15).</summary>
+        public static void SetRecordTreeRequested(bool value)
+        {
+            RecordTreeRequested = value;
+        }
 
         /// <summary>Узлы дерева A (от старта) — конфигурации суставов.</summary>
         public readonly List<double[]> TreeNodesA = new List<double[]>();
@@ -384,6 +422,18 @@ namespace TrajectoryCore
         public bool TreeSolved { get; private set; }
         /// <summary>Итераций в последней записи.</summary>
         public int TreeIterations { get; private set; }
+        /// <summary>
+        /// ФИКС 3. Запись дерева ВООБЩЕ включалась (`RecordTree`) и хотя бы один раз начиналась.
+        /// Нужна, чтобы отличать «дерево не строили» от «дерево построено, но случайно пусто»:
+        /// в отчёте и в диагностике это РАЗНЫЕ состояния, и путать их нельзя.
+        /// </summary>
+        public bool TreeRecorded { get; private set; }
+        /// <summary>
+        /// ФИКС 3. Сколько путей планировщик отдал в ПОСЛЕДНЕМ `Plan`: если больше нуля, а узлов
+        /// нет — путь был найден напрямую (`PlanToGoal`/`PlanViaWaypoint` не записывают дерево),
+        /// и оператор получает честное объяснение вместо пустого экрана.
+        /// </summary>
+        public int LastPathsFound { get; private set; }
 
         private void BeginTreeRecording(double[] start, double[] goal)
         {
@@ -392,6 +442,7 @@ namespace TrajectoryCore
             TreeNodesB.Clear();
             TreeParentsB.Clear();
             TreeVersion++;
+            TreeRecorded = true;
             TreeSolved = false;
             TreeIterations = 0;
             if (start != null)
@@ -404,6 +455,26 @@ namespace TrajectoryCore
                 TreeNodesB.Add((double[])goal.Clone());
                 TreeParentsB.Add(-1);
             }
+        }
+
+        /// <summary>
+        /// ФИКС 4. ОЧИСТИТЬ запись дерева и сбросить <see cref="TreeVersion"/> в 0.
+        /// Вызывается потоком при ПЕРЕПРИВЯЗКЕ робота: дерево принадлежало прежнему роботу
+        /// (другая размерность, другие лимиты), показывать его оператору нельзя, а пустой
+        /// экран без объяснения выглядел как «сломалось». Алгоритм планирования не меняется —
+        /// очищаются только списки визуализации.
+        /// </summary>
+        public void ClearTreeRecording()
+        {
+            TreeNodesA.Clear();
+            TreeParentsA.Clear();
+            TreeNodesB.Clear();
+            TreeParentsB.Clear();
+            TreeVersion = 0;
+            TreeSolved = false;
+            TreeIterations = 0;
+            TreeRecorded = false;      // ФИКС 3: записи нет — статус скажет «дерево не строилось»
+            LastPathsFound = 0;
         }
 
         private void RecordTreeNode(bool treeB, double[] q, int parent)
@@ -615,6 +686,10 @@ namespace TrajectoryCore
             // после сокращения давала ПОСТОЯННУЮ добавку `accelShare/2` = 0.125 с к КАЖДОМУ
             // сегменту пути. На пути из десятков сегментов (после short-cut дерева RRT)
             // это давало время «с запасом»: 3.999 с там, где по лимитам хватает 1.543 с.
+            //
+            // ФИКС 2 (§20): эта параметризация больше НЕ является итоговым временем траектории —
+            // она задаёт только плотность сэмплов (шаг по параметру пути). Итоговое время
+            // считает ApplySProfile тем же ядром, что и постобработка.
             double share = Mathf.Clamp(accelShare, 0f, 0.6f);
             for (int i = 0; i + 1 < path.Count; i++)
             {
@@ -656,6 +731,9 @@ namespace TrajectoryCore
                 Time = tAcc
             };
 
+            // ФИКС 2 (§20): время-оптимальный S-профиль вместо «трапеции с запасом».
+            ApplySProfile(t2);
+
             // Метрики: длина, минимальный зазор, запас лимитов, σ_min в цели.
             double len = 0;
             float minClear = float.MaxValue, minLimit = float.MaxValue;
@@ -678,6 +756,40 @@ namespace TrajectoryCore
             t2.SigmaMin = KinematicsJacobian.SigmaMin(jac, v.Dof) * 57.29578;
             _ = goalPoint;
             return t2;
+        }
+
+        /// <summary>
+        /// ФИКС 2 (§20). ПЕРЕСЧЁТ ВРЕМЕНИ ПЛАНИРОВЩИКА АНАЛИТИЧЕСКИМ S-ПРОФИЛЕМ.
+        ///
+        /// БЫЛО: путь проходился с ПОСТОЯННОЙ скоростью внутри сегментов и запасом
+        /// `1/(1 − accelShare)` = +33 % по времени; ускорение и рывок не учитывались вовсе
+        /// (в узлах сегментов скорость менялась мгновенно). Отсюда «время с большим запасом»
+        /// (§13.11, §19.16): 3,999 с там, где по лимитам хватает 1,543 с, — и заметный выигрыш
+        /// постобработки этапов 4–6 на ровном месте.
+        ///
+        /// СТАЛО: геометрия пути НЕ меняется (те же сэмплы), перепараметризуется только время —
+        /// тем же ядром, что и постобработка: `KvTrajMath.Retime`, внутри которого работает
+        /// аналитический S-профиль `KvTrajMath.SProfileBuild` (разгон → крейсер → торможение
+        /// с ограничением скорости, ускорения И рывка). Пределы берутся из
+        /// <see cref="MotionLimits"/> — того же набора, что у сглаживания и время-оптимальной,
+        /// поэтому времена планировщика и постобработки совпадают.
+        ///
+        /// Если валидатор не готов или профиль не построился — остаётся прежняя параметризация:
+        /// поведение планировщика не ломается.
+        /// </summary>
+        private void ApplySProfile(PlannedTrajectory t)
+        {
+            if (t == null || v == null || !v.Ready) return;
+            if (t.Path == null || t.Times == null || t.Path.Length < 3) return;
+
+            KvMotionLimits lim = MotionLimits != null ? MotionLimits : new KvMotionLimits();
+            // publishProfileNote: false — планировщик считает профиль «внутри себя» и НЕ должен
+            // переписывать строку о последнем профиле, которую показывает вкладка оператора.
+            PlannedTrajectory timed = KvTrajMath.Retime(v, t, lim, 1f, 1f, t.Label, true, false);
+            if (timed == null || timed.Times == null || timed.Times.Length != t.Times.Length) return;
+
+            t.Times = timed.Times;
+            t.Time = timed.Time;
         }
 
         /// <summary>

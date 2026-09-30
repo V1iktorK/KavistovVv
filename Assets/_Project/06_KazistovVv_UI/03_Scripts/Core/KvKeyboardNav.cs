@@ -7,30 +7,33 @@ using UnityEngine.UI;
 namespace KazistovVvUI
 {
     /// <summary>
-    /// НАВИГАЦИЯ ПО ИНТЕРФЕЙСУ С КЛАВИАТУРЫ (ЭТАП 11): Tab / Shift+Tab — вперёд-назад,
-    /// стрелки — по соседним кнопкам (геометрически, как в панелях инструментов),
-    /// Enter или пробел — нажать, Esc — снять фокус. Фокус обводится рамкой.
+    /// НАВИГАЦИЯ ПО ИНТЕРФЕЙСУ С КЛАВИАТУРЫ (ЭТАП 11): стрелки — фокус и переход
+    /// по кнопкам панели тулбара (геометрически, как в панелях инструментов), Enter — нажать,
+    /// Esc — снять фокус. Фокус обводится рамкой.
+    ///
+    /// ФИКС 5 (§22): пробел СНЯТ с активации (ТЗ: «Пробел в проекте должен быть свободен»).
+    /// Раньше он дублировал Enter, и нажатие пробела при фокусе на кнопке «Деревья поведения»
+    /// открывало это окно. Активация — только Enter / цифровой Enter.
+    ///
+    /// ФИКС 2 (§23) — TAB НЕ ПЕРЕКЛЮЧАЕТ ОБЛАСТИ: `Ctrl+Tab` (переключатель «Тулбар → Меню →
+    /// Дерево» из §22.9) УБРАН ПОЛНОСТЬЮ, области переключает отдельная клавиша **F6**;
+    /// обратный переход «на уровень выше» — контекстный `Esc`.
+    ///
+    /// §26 — TAB ОТДАН РЕЖИМУ КУРСОРА и в навигации больше НЕ участвует: он переключает
+    /// «режим камеры ⟷ режим интерфейса» (<see cref="KvMouseCursor.ModeToggleKey"/>).
+    /// Фокус по кнопкам тулбара ставится ПЕРВОЙ ЖЕ СТРЕЛКОЙ (или возвратом в область «Тулбар»
+    /// по F6) — раньше это делал Tab, и без него стрелки были бы недоступны.
     ///
     /// Работает ТОЛЬКО в режиме интерфейса (курсор свободен, панели видны) и только когда
-    /// настройка «Навигация с клавиатуры» включена — в телеоперации клавиши принадлежат
+    /// настройка «Навигация с клавиатуры» включена — в режиме камеры клавиши принадлежат
     /// роботу, как и раньше.
     ///
-    /// ВАЖНО: пока навигация включена, Tab занят фокусом, поэтому ПЕРЕКЛЮЧЕНИЕ ИНТЕРФЕЙСА
-    /// переезжает на Esc (показать) и на команду «Показать / скрыть интерфейс» (тулбар/меню,
-    /// горячая клавиша TAB указана в подсказке команды). Это единственное изменение
-    /// поведения клавиши, и оно выключается вместе с настройкой.
+    /// ВАЖНО: режим КУРСОРА переключает Tab (KvMouseCursor, §26), интерфейс показывает/скрывает
+    /// отдельная команда «Показать / скрыть интерфейс» (тулбар/меню), Esc из режима камеры тоже
+    /// приводит в режим интерфейса. Ни одна из них не занята навигацией.
     /// </summary>
     public class KvKeyboardNav : MonoBehaviour
     {
-        /// <summary>
-        /// Навигация забирает Tab себе. Пока true, контроллер камеры НЕ переключает
-        /// режим интерфейса по Tab (иначе одно нажатие делало бы два дела).
-        /// </summary>
-        public static bool TabHandledByNavigation
-        {
-            get { return instance != null && instance.enabled && KvSettings.KeyboardNav; }
-        }
-
         private static KvKeyboardNav instance;
 
         private KazistovVvUIManager ui;
@@ -110,10 +113,12 @@ namespace KazistovVvUI
             if (ui == null || toolbar == null) return;
 
             // Навигация нужна только в режиме интерфейса: в телеоперации клавиши — роботу.
-            bool uiMode = Cursor.lockState != CursorLockMode.Locked && ui != null && ui.uiVisible;
+            // ФИКС 7/8 (§22): источник правды о курсоре — KvMouseCursor.
+            bool uiMode = !KvMouseCursor.Captured && ui.uiVisible;
             if (!uiMode)
             {
                 if (HasFocus) ClearFocus();
+                ResetScopeMarks();
                 return;
             }
             // Пока текст вводится (палитра, поиск биндов, переименование) — не мешаем.
@@ -126,22 +131,264 @@ namespace KazistovVvUI
                 RebuildFocusables();
             }
 
-            bool tab = KeyDown(KeyCode.Tab);
-            bool shift = KeyHeld(KeyCode.LeftShift) || KeyHeld(KeyCode.RightShift);
-            if (tab)
+            // ФИКС 2 (§23): ПЕРЕКЛЮЧЕНИЕ ОБЛАСТЕЙ — ОТДЕЛЬНАЯ КЛАВИША F6.
+            // `Ctrl+Tab` УДАЛЁН ПОЛНОСТЬЮ (по ТЗ: «убрать Tab из переключения меню/областей»),
+            // `Tab` остался только для фокуса внутри панели тулбара (ниже, в UpdateToolbarScope).
+            // Одно нажатие — одна область; внутри области работают стрелки, Esc возвращает
+            // на уровень выше (меню/дерево → тулбар).
+            if (KeyDown(KeyCode.F6))
             {
-                if (focusables.Count > 0) Move(shift ? -1 : 1);
+                NextScope();
                 return;
             }
-            if (!HasFocus) return;
+
+            switch (scope)
+            {
+                case NavScope.Menu:
+                    UpdateMenuScope();
+                    return;
+                case NavScope.Tree:
+                    UpdateTreeScope();
+                    return;
+                default:
+                    UpdateToolbarScope();
+                    return;
+            }
+        }
+
+        // ================================================================== ФИКС 9 (§22) + ФИКС 2 (§23)
+        // ОБЛАСТИ НАВИГАЦИИ: стрелки не могут одновременно ходить и по тулбару, и по меню,
+        // и по дереву, поэтому активная область выбирается ОТДЕЛЬНОЙ КЛАВИШЕЙ **F6**
+        // (в §22 это был `Ctrl+Tab` — он убран по ТЗ ФИКСА 2), а внутри неё работают
+        // стрелки (плюс Enter). Обратно «на уровень выше» возвращает контекстный Esc.
+        // Подсветка: в тулбаре — рамка (как было), в меню и дереве —
+        // их собственная подсветка выбора, ничего не дублируется.
+
+        /// <summary>Активная область навигации с клавиатуры.</summary>
+        public enum NavScope
+        {
+            /// <summary>Кнопки тулбара (по умолчанию).</summary>
+            Toolbar = 0,
+            /// <summary>Строка меню: ←/→ — группы, ↓ — открыть, ↑/↓ — пункты, Enter — нажать.</summary>
+            Menu = 1,
+            /// <summary>Дерево моделей: ↑/↓ — узлы, ←/→ — свернуть/развернуть.</summary>
+            Tree = 2
+        }
+
+        private NavScope scope = NavScope.Toolbar;
+        private int menuIndex = -1;      // подсвеченная группа верхнего меню
+        private int rowIndex = -1;       // подсвеченный пункт открытого меню
+
+        /// <summary>Активная область (диагностика и подсказка состояния).</summary>
+        public NavScope Scope { get { return scope; } }
+        /// <summary>Имя активной области по-русски (для строки состояния/подсказки).</summary>
+        public string ScopeLabel
+        {
+            get
+            {
+                switch (scope)
+                {
+                    case NavScope.Menu: return "Меню";
+                    case NavScope.Tree: return "Дерево";
+                    default: return "Тулбар";
+                }
+            }
+        }
+
+        private void NextScope()
+        {
+            scope = (NavScope)(((int)scope + 1) % 3);
+            ResetScopeMarks();
+            if (scope == NavScope.Toolbar && focusables.Count > 0) Move(1);
+            Debug.Log("[KvNav] Область навигации: " + ScopeLabel +
+                      " (F6 — следующая, стрелки — внутри области, Esc — уровень выше)");
+        }
+
+        private void ResetScopeMarks()
+        {
+            rowIndex = -1;
+            KvMenuBar bar = ui != null ? ui.Menu : null;
+            if (bar != null) bar.HighlightRow(-1);
+            menuIndex = bar != null ? bar.OpenMenuIndex : -1;
+        }
+
+        /// <summary>Стрелки и Enter в области «Тулбар» (поведение ЭТАПА 11 не менялось).</summary>
+        private void UpdateToolbarScope()
+        {
+            // §26: Tab здесь БОЛЬШЕ НЕ ЧИТАЕТСЯ — он переключает режим курсора
+            // (KvMouseCursor.ModeToggleKey). Фокус ставится первой стрелкой либо возвратом
+            // в область «Тулбар» по F6 (<see cref="NextScope"/>), поэтому стрелки доступны.
+            if (!HasFocus)
+            {
+                if (KeyDown(KeyCode.RightArrow) || KeyDown(KeyCode.LeftArrow) ||
+                    KeyDown(KeyCode.UpArrow) || KeyDown(KeyCode.DownArrow))
+                    Move(1);
+                return;
+            }
 
             if (KeyDown(KeyCode.RightArrow)) MoveGeometric(new Vector2(1f, 0f));
             else if (KeyDown(KeyCode.LeftArrow)) MoveGeometric(new Vector2(-1f, 0f));
             else if (KeyDown(KeyCode.UpArrow)) MoveGeometric(new Vector2(0f, 1f));
             else if (KeyDown(KeyCode.DownArrow)) MoveGeometric(new Vector2(0f, -1f));
-            else if (KeyDown(KeyCode.Return) || KeyDown(KeyCode.KeypadEnter) || KeyDown(KeyCode.Space))
+            // ФИКС 5 (§22): ПРОБЕЛ БОЛЬШЕ НЕ НАЖИМАЕТ кнопку в фокусе. Раньше он был вторым
+            // (после Enter) способом активации, и если фокус стоял на кнопке «Деревья поведения»
+            // (`bt.tab`), нажатие пробела открывало это окно — оператор видел «на пробел
+            // открывается меню «Деревья поведения»». По ТЗ пробел в проекте должен быть свободен:
+            // активация — только Enter / Enter на цифровой клавиатуре.
+            else if (KeyDown(KeyCode.Return) || KeyDown(KeyCode.KeypadEnter))
                 Activate();
             else if (KeyDown(KeyCode.Escape)) ClearFocus();
+        }
+
+        /// <summary>
+        /// Стрелки в области «Меню»: ←/→ — группы верхнего меню (открытая группа переезжает),
+        /// ↓ — открыть группу / ходить по пунктам вниз, ↑ — по пунктам вверх, Enter — нажать
+        /// подсвеченный пункт, Esc — закрыть меню и вернуться в тулбар.
+        /// </summary>
+        private void UpdateMenuScope()
+        {
+            KvMenuBar bar = ui != null ? ui.Menu : null;
+            if (bar == null || bar.MenuCount == 0) return;
+
+            bool left = KeyDown(KeyCode.LeftArrow);
+            bool right = KeyDown(KeyCode.RightArrow);
+            bool up = KeyDown(KeyCode.UpArrow);
+            bool down = KeyDown(KeyCode.DownArrow);
+
+            if (left || right)
+            {
+                if (menuIndex < 0) menuIndex = bar.OpenMenuIndex >= 0 ? bar.OpenMenuIndex : 0;
+                menuIndex += right ? 1 : -1;
+                if (menuIndex < 0) menuIndex = bar.MenuCount - 1;
+                if (menuIndex >= bar.MenuCount) menuIndex = 0;
+                bar.SetKeyboardHighlight(menuIndex);
+                // Если меню уже открыто — переезжаем на соседнюю группу сразу (как в FreeCAD).
+                if (bar.OpenMenuIndex >= 0) bar.ToggleMenu(bar.MenuNameAt(menuIndex));
+                rowIndex = -1;
+                return;
+            }
+
+            if (down)
+            {
+                if (bar.OpenMenuIndex < 0)
+                {
+                    if (menuIndex < 0) menuIndex = 0;
+                    bar.ToggleMenu(bar.MenuNameAt(menuIndex));
+                    rowIndex = -1;
+                    return;
+                }
+                rowIndex++;
+                if (rowIndex >= bar.NavigableRowCount) rowIndex = bar.NavigableRowCount - 1;
+                bar.HighlightRow(rowIndex);
+                return;
+            }
+
+            if (up)
+            {
+                if (bar.OpenMenuIndex < 0)
+                {
+                    if (menuIndex < 0) menuIndex = 0;
+                    bar.ToggleMenu(bar.MenuNameAt(menuIndex));
+                    rowIndex = bar.NavigableRowCount - 1;
+                    bar.HighlightRow(rowIndex);
+                    return;
+                }
+                rowIndex--;
+                if (rowIndex < 0) rowIndex = 0;
+                bar.HighlightRow(rowIndex);
+                return;
+            }
+
+            if (KeyDown(KeyCode.Return) || KeyDown(KeyCode.KeypadEnter))
+            {
+                if (bar.OpenMenuIndex >= 0 && rowIndex >= 0)
+                {
+                    bar.ActivateRow(rowIndex);       // Command.Invoke внутри — как при клике мышью
+                    rowIndex = -1;
+                }
+                else
+                {
+                    if (menuIndex < 0) menuIndex = 0;
+                    bar.ToggleMenu(bar.MenuNameAt(menuIndex));
+                    rowIndex = -1;
+                }
+                return;
+            }
+
+            // Esc: закрыть меню; если оно уже закрыто — вернуться в тулбар.
+            if (KeyDown(KeyCode.Escape))
+            {
+                if (bar.OpenMenuIndex >= 0)
+                {
+                    bar.CloseMenu();
+                    bar.SetKeyboardHighlight(-1);
+                    rowIndex = -1;
+                }
+                else
+                {
+                    scope = NavScope.Toolbar;
+                    bar.SetKeyboardHighlight(-1);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Стрелки в области «Дерево»: ↑/↓ — по видимым узлам, → — развернуть узел
+        /// (или перейти к первому потомку), ← — свернуть узел, Esc — вернуться в тулбар.
+        /// Выделение узла идёт тем же <see cref="KvTreeView.Select"/>, что и клик мышью.
+        /// </summary>
+        private void UpdateTreeScope()
+        {
+            KvTreeView tree = ui != null ? ui.Tree : null;
+            if (tree == null) return;
+
+            List<ProjectNode> nodes = tree.VisibleNodes();
+            if (nodes.Count == 0) return;
+
+            if (KeyDown(KeyCode.Escape)) { scope = NavScope.Toolbar; return; }
+
+            int current = nodes.IndexOf(tree.Selected);
+
+            if (KeyDown(KeyCode.DownArrow))
+            {
+                int next = current < 0 ? 0 : Mathf.Min(current + 1, nodes.Count - 1);
+                tree.Select(nodes[next]);
+                return;
+            }
+            if (KeyDown(KeyCode.UpArrow))
+            {
+                int prev = current < 0 ? 0 : Mathf.Max(current - 1, 0);
+                tree.Select(nodes[prev]);
+                return;
+            }
+            if (KeyDown(KeyCode.RightArrow))
+            {
+                if (current < 0) { tree.Select(nodes[0]); return; }
+                ProjectNode node = nodes[current];
+                if (!tree.IsExpandedNode(node) && node.Children != null && node.Children.Count > 0)
+                    tree.Expand(node.Key);
+                else if (node.Children != null && node.Children.Count > 0)
+                    tree.Select(node.Children[0]);
+                return;
+            }
+            if (KeyDown(KeyCode.LeftArrow))
+            {
+                if (current < 0) return;
+                tree.Collapse(nodes[current]);
+            }
+        }
+
+        /// <summary>Удерживается ли Ctrl. ФИКС 2 (§23): навигацией больше НЕ используется.</summary>
+        private static bool CtrlHeld()
+        {
+            try
+            {
+                if (Keyboard.current != null)
+                    return Keyboard.current.leftCtrlKey.isPressed || Keyboard.current.rightCtrlKey.isPressed;
+            }
+            catch { }
+            try { return Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl); }
+            catch { return false; }
         }
 
         private static bool IsTypingInField()
@@ -193,6 +440,7 @@ namespace KazistovVvUI
             switch (code)
             {
                 case KeyCode.Tab: return UnityEngine.InputSystem.Key.Tab;
+                case KeyCode.F6: return UnityEngine.InputSystem.Key.F6;
                 case KeyCode.Return: return UnityEngine.InputSystem.Key.Enter;
                 case KeyCode.KeypadEnter: return UnityEngine.InputSystem.Key.NumpadEnter;
                 case KeyCode.Space: return UnityEngine.InputSystem.Key.Space;

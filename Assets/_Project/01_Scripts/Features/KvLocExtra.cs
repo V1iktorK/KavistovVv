@@ -31,6 +31,21 @@ namespace KazistovVvFeatures
         /// <summary>Сколько строк зарегистрировано модулем (диагностика).</summary>
         public static int RegisteredCount { get { return registered; } }
 
+        /// <summary>
+        /// ФИКС 13. Сколько строк в таблице модуля и ключ по номеру — для ТЕСТА ПОЛНОТЫ ПЕРЕВОДА:
+        /// у каждого ключа обязаны быть непустые значения во ВСЕХ семи языках (RU/EN/ZH/ES/DE/FR/JA),
+        /// а не только у раздела «Графика». Раньше такой доступ был только у `KvLocExtra4`,
+        /// поэтому проверялся лишь он один.
+        /// </summary>
+        public static int RowCount { get { return Rows.Length; } }
+
+        /// <summary>Ключ строки таблицы по номеру (для теста покрытия 7 языков).</summary>
+        public static string KeyAt(int index)
+        {
+            if (index < 0 || index >= Rows.Length) return "";
+            return Rows[index] != null && Rows[index].Length > 0 ? Rows[index][0] : "";
+        }
+
         /// <summary>Перевод по ключу (fallback — русский текст из кода).</summary>
         public static string T(string key, string fallback)
         {
@@ -454,6 +469,78 @@ namespace KazistovVvFeatures
                 "Nach der Planung automatisch anwenden",
                 "Appliquer automatiquement après planification",
                 "計画後に自動適用"),
+            // ФИКС 7: стоимость автосглаживания — обрабатывать один выбранный вариант вместо всех 8.
+            Row("smooth.auto.selected",
+                "Сглаживать только выбранный вариант (быстрее)",
+                "Smooth only the selected variant (faster)",
+                "仅平滑所选方案（更快）",
+                "Suavizar solo la variante seleccionada (más rápido)",
+                "Nur die ausgewählte Variante glätten (schneller)",
+                "Lisser uniquement la variante sélectionnée (plus rapide)",
+                "選択した案のみ平滑化（高速）"),
+            // ФИКС 3 (§20): точечное сглаживание изломов пути и подсветка проблемных участков.
+            Row("smooth.corners.only",
+                "Точечно сглаживать изломы (только проблемные участки)",
+                "Smooth corners only (problem segments only)",
+                "仅平滑拐角（只处理问题段）",
+                "Suavizar solo las esquinas (solo tramos problemáticos)",
+                "Nur Ecken glätten (nur Problemabschnitte)",
+                "Lisser uniquement les angles (segments problématiques)",
+                "コーナーのみ平滑化（問題区間だけ）"),
+            Row("smooth.corners.none",
+                "Изломов нет (порог {0}°): путь гладкий, точечное сглаживание не нужно",
+                "No corners (threshold {0}°): the path is smooth, corner smoothing is not needed",
+                "无拐角（阈值 {0}°）：路径平滑，无需拐角平滑",
+                "Sin esquinas (umbral {0}°): la ruta es suave, no hace falta suavizado puntual",
+                "Keine Ecken (Schwelle {0}°): der Pfad ist glatt, Ecken-Glättung nicht nötig",
+                "Aucun angle (seuil {0}°) : le chemin est lisse, lissage ponctuel inutile",
+                "コーナーなし（しきい値 {0}°）：経路は滑らかで、部分平滑化は不要です"),
+            Row("smooth.corners.found",
+                "Изломов: {0} · самый острый {1}° (порог {2}°) — предлагается сгладить эти участки",
+                "Corners: {0} · sharpest {1}° (threshold {2}°) — smoothing these segments is suggested",
+                "拐角数：{0} · 最尖 {1}°（阈值 {2}°）——建议平滑这些区段",
+                "Esquinas: {0} · la más aguda {1}° (umbral {2}°) — se sugiere suavizar esos tramos",
+                "Ecken: {0} · schärfste {1}° (Schwelle {2}°) — Glättung dieser Abschnitte empfohlen",
+                "Angles : {0} · le plus vif {1}° (seuil {2}°) — lissage de ces segments suggéré",
+                "コーナー数：{0} · 最も鋭い {1}°（しきい値 {2}°）——これらの区間の平滑化を推奨します"),
+            Row("smooth.corners.suggest",
+                "Излом пути {0}° (участков: {1}) — такой участок стоит сгладить: " +
+                "вкладка «Сглаживание траектории», опция «только изломы»",
+                "Path corner {0}° (segments: {1}) — consider smoothing it: " +
+                "tab “Trajectory smoothing”, option “corners only”",
+                "路径拐角 {0}°（区段：{1}）——建议平滑：选项卡“轨迹平滑”，选项“仅拐角”",
+                "Esquina de ruta {0}° (tramos: {1}) — conviene suavizarla: " +
+                "pestaña «Suavizado de trayectoria», opción «solo esquinas»",
+                "Pfadecke {0}° (Abschnitte: {1}) — Glättung empfohlen: " +
+                "Register „Bahn glätten“, Option „nur Ecken“",
+                "Angle de trajectoire {0}° (segments : {1}) — à lisser : " +
+                "onglet « Lissage de trajectoire », option « angles seulement »",
+                "経路のコーナー {0}°（区間：{1}）——平滑化を推奨：「軌道の平滑化」タブ、" +
+                "オプション「コーナーのみ」"),
+            Row("smooth.auto.off",
+                "Автосглаживание выключено — сглаживание применяется только по кнопке.",
+                "Auto-smoothing is off — smoothing is applied by button only.",
+                "自动平滑已关闭——仅通过按钮应用平滑。",
+                "El suavizado automático está desactivado: se aplica solo con el botón.",
+                "Automatisches Glätten ist aus — Glätten nur per Schaltfläche.",
+                "Le lissage automatique est désactivé — lissage uniquement par bouton.",
+                "自動平滑はオフです。平滑化はボタンでのみ実行されます。"),
+            Row("smooth.auto.wait",
+                "Ждём первую точку: после планирования здесь появится время обработки.",
+                "Waiting for the first point: processing time will appear here after planning.",
+                "等待首个点：规划后将在此显示处理耗时。",
+                "Esperando el primer punto: el tiempo de proceso aparecerá aquí tras planificar.",
+                "Warte auf den ersten Punkt: die Bearbeitungszeit erscheint hier nach der Planung.",
+                "En attente du premier point : le temps de traitement apparaîtra ici après la planification.",
+                "最初の点を待機中：計画後に処理時間がここに表示されます。"),
+            Row("smooth.auto.cost",
+                "Последнее автосглаживание: ",
+                "Last auto-smoothing: ",
+                "上次自动平滑：",
+                "Último suavizado automático: ",
+                "Letztes automatisches Glätten: ",
+                "Dernier lissage automatique : ",
+                "前回の自動平滑化："),
             Row("smooth.apply",
                 "Сгладить выбранную", "Smooth selected", "平滑所选轨迹", "Suavizar la seleccionada",
                 "Ausgewählte glätten", "Lisser la sélection", "選択した軌道を平滑化"),
@@ -527,21 +614,25 @@ namespace KazistovVvFeatures
                 "計画後の後処理：関節空間で経路を平滑化（B スプライン／ベジェ／ガウス）し、" +
                 "速度・加速度制限に従って時間を再計算します。始点と終点は移動しません。"),
             Row("smooth.retime.note",
-                "Время пересчитывается по лимитам: у планировщика оно с большим запасом " +
-                "(в проверке — 3.999 с против 1.543 с), поэтому после постобработки траектория " +
-                "становится заметно быстрее.",
-                "Timing is recomputed by the limits: the planner's own timing is very conservative " +
-                "(3.999 s vs 1.543 s in the check), so trajectories get much faster after processing.",
-                "时间按限制重新计算：规划器自身的时间非常保守（检查中为 3.999 秒 对 1.543 秒），" +
-                "因此后处理后轨迹明显更快。",
-                "El tiempo se recalcula según los límites: el del planificador es muy conservador " +
-                "(3,999 s frente a 1,543 s), por lo que la trayectoria se acelera tras el proceso.",
-                "Die Zeit wird nach den Grenzen neu berechnet: die des Planers ist sehr konservativ " +
-                "(3,999 s gegen 1,543 s), daher wird die Bahn danach deutlich schneller.",
-                "Le temps est recalculé selon les limites : celui du planificateur est très conservateur " +
-                "(3,999 s contre 1,543 s), la trajectoire devient donc plus rapide.",
-                "時間は制限に従って再計算されます。プランナ自身の時間は非常に保守的（3.999 秒 対 1.543 秒）" +
-                "のため、後処理後に軌道は大幅に高速化します。"),
+                "Время пересчитывается по лимитам. ФИКС 2 (§20): планировщик теперь сам отдаёт " +
+                "время-оптимальный S-профиль по ТЕМ ЖЕ лимитам, поэтому выигрыш «До / После» — " +
+                "это выигрыш от ФОРМЫ пути (сглаживание), а не от пересчёта времени.",
+                "Timing is recomputed by the limits. Fix 2 (§20): the planner now delivers a " +
+                "time-optimal S-profile under the SAME limits, so the Before/After gain comes " +
+                "from the path SHAPE (smoothing), not from retiming.",
+                "时间按限制重新计算。修复 2（§20）：规划器现在以相同限制直接给出时间最优 S 曲线，" +
+                "因此“之前/之后”的收益来自路径形状（平滑），而非重新计时。",
+                "El tiempo se recalcula según los límites. Corrección 2 (§20): el planificador ya " +
+                "entrega un perfil S óptimo en tiempo con los MISMOS límites, así que la mejora " +
+                "Antes/Después viene de la FORMA de la ruta (suavizado), no del recálculo.",
+                "Die Zeit wird nach den Grenzen neu berechnet. Fix 2 (§20): der Planer liefert nun " +
+                "selbst ein zeitoptimales S-Profil unter DENSELBEN Grenzen; der Vorher/Nachher-Gewinn " +
+                "kommt daher aus der PFADFORM (Glättung), nicht aus der Neuberechnung.",
+                "Le temps est recalculé selon les limites. Correctif 2 (§20) : le planificateur " +
+                "fournit désormais un profil S temps-optimal avec les MÊMES limites ; le gain " +
+                "Avant/Après vient donc de la FORME du chemin (lissage), pas du recalcul.",
+                "時間は制限に従って再計算されます。修正 2（§20）：プランナ自身が同じ制限で時間最適な " +
+                "S プロファイルを返すため、「前／後」の利得は経路形状（平滑化）によるものです。"),
 
             // ---------------------------------------------------------- ЭТАП 5: время-оптимальная
             Row("topt.title",

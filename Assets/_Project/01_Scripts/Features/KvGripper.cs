@@ -47,6 +47,17 @@ namespace KazistovVvFeatures
         public float Open01 { get; private set; }
         public bool IsOpen { get { return Open01 > 0.5f; } }
         public bool Attached { get { return root != null; } }
+        /// <summary>
+        /// Робот, НА КОТОРОМ собран захват (ФИКС 3). Раньше это число нигде не хранилось:
+        /// поток мог перепривязаться к другому роботу, а захват оставался на прежнем — и
+        /// «пальцы не двигаются», потому что двигаются они на другом стенде.
+        /// </summary>
+        public RobotController Robot { get; private set; }
+        /// <summary>Захват собран ровно на этом роботе (ФИКС 3).</summary>
+        public bool AttachedTo(RobotController robot)
+        {
+            return root != null && robot != null && Robot == robot;
+        }
         /// <summary>Захваченный объект (null — пусто).</summary>
         public Transform Held { get; private set; }
 
@@ -59,11 +70,26 @@ namespace KazistovVvFeatures
         private Material material;
         private float target01;
 
-        /// <summary>Собрать/пересобрать захват на роботе (вызывается при инициализации и смене робота).</summary>
+        /// <summary>
+        /// Собрать/пересобрать захват на роботе (вызывается при инициализации и смене робота).
+        ///
+        /// ФИКС 3. Робот берётся У ПОТОКА (`flow.Robot` → сюда), сам захват робота не ищет:
+        /// ни `FindFirstObjectByType`, ни обхода сцены здесь нет и не было.
+        /// Две защиты от «пальцы не двигаются»:
+        ///   1) если захват УЖЕ собран на этом же роботе — пересборки нет (иначе каждое
+        ///      обращение потока сбрасывало бы анимацию пальцев в открытое состояние);
+        ///   2) при переезде на ДРУГОГО робота раскрытие СОХРАНЯЕТСЯ: оператор нажал «сжать» —
+        ///      пальцы остаются сжатыми и на новом роботе, а не «сами разжимаются».
+        /// </summary>
         public bool Attach(RobotController robot)
         {
-            Detach();
             if (robot == null) return false;
+            if (AttachedTo(robot)) return true;          // уже на этом роботе — ничего не трогаем
+
+            float keepOpen01 = root != null ? Open01 : 1f;
+            float keepTarget01 = root != null ? target01 : 1f;
+
+            Detach();
             Transform tcp = robot.tcp;
             if (tcp == null) return false;
 
@@ -89,11 +115,16 @@ namespace KazistovVvFeatures
             holder = holderGo.transform;
             holder.localPosition = Extend * GraspDrop;
 
-            Open01 = 1f;
-            target01 = 1f;
+            Robot = robot;
+            Open01 = Mathf.Clamp01(keepOpen01);          // состояние пальцев переносится
+            target01 = Mathf.Clamp01(keepTarget01);
             Apply();
             Debug.Log("[Gripper] захват собран на роботе «" + robot.robotName + "» (TCP: " +
-                      tcp.name + ") · раскрытие " + (openWidth * 1000f).ToString("0") + " мм");
+                      tcp.name + ") · раскрытие " +
+                      (Width * 1000f).ToString("0") + " мм (из " +
+                      (openWidth * 1000f).ToString("0") + " мм), состояние " +
+                      (IsOpen ? "разжат" : "сжат") +
+                      " · робот взят у потока (flow.Robot)");
             return true;
         }
 
@@ -215,6 +246,7 @@ namespace KazistovVvFeatures
             fingerB = null;
             holder = null;
             material = null;
+            Robot = null;          // ФИКС 3: захват больше ни на ком не собран
         }
 
         private static void DestroySafe(UnityEngine.Object o)

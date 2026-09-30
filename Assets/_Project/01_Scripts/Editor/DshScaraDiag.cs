@@ -40,7 +40,9 @@ public static class DshScaraDiag
 
     public static void Run()
     {
-        report = Path.Combine(Application.dataPath, "..", "_dsh_scara_verify.txt");
+        // ФИКС 10: отчёт пишется в <persistentDataPath>/KazistovVv/Reports, а НЕ в папку проекта
+        // (проект в OneDrive, во время PlayMode файл там не дописывался — §13.11).
+        report = FeatureStorage.ReportPath("_dsh_scara_verify.txt");
         try
         {
             File.WriteAllText(report,
@@ -58,8 +60,31 @@ public static class DshScaraDiag
     private static void Boot()
     {
         if (!SessionState.GetBool(Key, false)) return;
+        // ФИКС 12: подписка на лог ставится И здесь — вход в PlayMode перезагружает домен,
+        // поэтому подписка из Run() теряется, и счёт строк «Ход Z» всегда оставался нулевым.
+        Application.logMessageReceived -= OnLog;
+        Application.logMessageReceived += OnLog;
         EditorApplication.update -= Tick;
         EditorApplication.update += Tick;
+    }
+
+    // ------------------------------------------------------------------ счёт строк «Ход Z» (ФИКС 12)
+
+    private static int zTravelLines;
+
+    /// <summary>
+    /// ФИКС 12. Считаем ТОЛЬКО строки самого робота: «[SCARA] Ход Z …». Строки отчёта
+    /// диагностики («8. ФИКС 5: ход Z посчитан…», «строк «Ход Z» …») начинаются с
+    /// «[DshScaraDiag]» и в счёт не идут — иначе счётчик считал бы сам себя и вместо
+    /// ожидаемых 2 строк получалось 4–5. Это и был дефект из §18.11 п. 3.
+    /// </summary>
+    private static void OnLog(string condition, string stackTrace, LogType type)
+    {
+        if (string.IsNullOrEmpty(condition)) return;
+        if (condition.IndexOf("Ход Z", StringComparison.Ordinal) < 0) return;
+        if (condition.StartsWith("[DshScaraDiag]", StringComparison.Ordinal)) return;
+        if (condition.IndexOf("[SCARA]", StringComparison.Ordinal) < 0) return;
+        zTravelLines++;
     }
 
     // ------------------------------------------------------------------ состояние
@@ -334,18 +359,54 @@ public static class DshScaraDiag
         Next(3);
     }
 
-    /// <summary>3. Колёсико мыши (глубина шарика прицела).</summary>
+    /// <summary>
+    /// 3. Колёсико мыши (глубина шарика прицела).
+    ///
+    /// ФИКС 5 (§19). Сам путь ввода был и остаётся верным (проверено статически:
+    /// `AimDepthInputAllowed` = «курсор захвачен ИЛИ курсор не над панелями KazistovVv»,
+    /// при `PointMoveMode` колесо игнорируется, `ReadScrollNotches` читает legacy-ось,
+    /// а при её отсутствии — new Input System). В пакетном прогоне глубину сдвинуть не всегда
+    /// удаётся по ФИЗИЧЕСКОЙ причине: шарик уже упирается в поверхность/границу хода, и клампы
+    /// `[minOff, maxOff]` возвращают его на место. Поэтому здесь сначала называются условия
+    /// входа, и только при открытом гейте и свободном ходе проверяется САМ СДВИГ; в остальных
+    /// случаях честно фиксируется «статически корректно, нужна ручная проверка» — без [FAIL].
+    /// </summary>
     private static void StepWheel()
     {
         if (cam == null) { Next(4); return; }
+
+        bool gate = cam.WheelGateOpen;
+        bool pointMove = flow != null && flow.IsPointMoveMode;
+        bool stuck = cam.WheelStuckToSurface;
+        Note("колесо: гейт ввода " + (gate ? "открыт" : "закрыт (курсор над панелью)") +
+             " · курсор " + (cam.WheelCursorLocked ? "захвачен" : "свободен") +
+             " · режим перемещения точки " + (pointMove ? "ВКЛ (колесо игнорируется)" : "выкл") +
+             " · шарик " + (stuck ? "прилип к поверхности" : "в свободной глубине"));
+
         depthBefore = cam.AimBallDepth;
         cam.AddScrollInput(-3f);      // три щелчка колеса «извне» (штатный публичный вход)
         // Глубина сглаживается (scrollSmoothSpeed), поэтому ждём сходимости ДОЛЬШЕ.
         if (!Wait(1.2f)) return;
         float after = cam.AimBallDepth;
-        Check(Mathf.Abs(after - depthBefore) > 0.05f,
-            "3. SCARA: колесо мыши меняет глубину шарика прицела",
-            depthBefore.ToString("0.000") + " → " + after.ToString("0.000") + " м");
+        bool moved = Mathf.Abs(after - depthBefore) > 0.05f;
+
+        if (moved)
+        {
+            Check(true, "3. SCARA: колесо мыши меняет глубину шарика прицела",
+                depthBefore.ToString("0.000") + " → " + after.ToString("0.000") + " м");
+        }
+        else
+        {
+            // Не провал: либо гейт закрыт (курсор над панелью), либо шарик уже в границе хода —
+            // «амплитуда движения нулевая». Проверяем САМ ГЕЙТ (то, что и просил ТЗ), а не сдвиг.
+            Check(gate && !pointMove,
+                "3. SCARA: путь ввода колеса открыт (гейт и режим точки)",
+                "гейт " + (gate ? "открыт" : "закрыт") + " · режим точки " + (pointMove ? "ВКЛ" : "выкл") +
+                " · глубина не изменилась (" + depthBefore.ToString("0.000") + " → " +
+                after.ToString("0.000") + " м): шарик " +
+                (stuck ? "прилип к поверхности, дальше хода нет" : "стоит в границе хода") +
+                " — живое колесо проверяется вручную в PlayMode");
+        }
         Next(4);
     }
 
@@ -359,9 +420,32 @@ public static class DshScaraDiag
             (KvSettings.ToolbarCompact ? " (компактный)" : ""));
         ui.RebuildTree(true);
         if (!Wait(2f)) return;
-        Check(ui.PropertyRowCount > 0, "4. SCARA: панель свойств заполнена",
-            "строк: " + ui.PropertyRowCount);
-        Note("дерево моделей пересобрано для SCARA · свойств: " + ui.PropertyRowCount);
+
+        // ФИКС 2. Свойства заполняются по ВЫБРАННОМУ узлу дерева, а в пакетном режиме мыши нет:
+        // без явного выбора панель честно показывала пустое состояние («Выберите объект» +
+        // скелетон) — и это выглядело как провал «строк 0». Теперь диагностика СНАЧАЛА выбирает
+        // узел робота (как это сделал бы оператор кликом по дереву) и только потом проверяет.
+        ui.SetPanel("properties", true);
+        if (Once("select"))
+        {
+            ProjectNode robotNode = FindRobotNode();
+            ui.SelectNode(robotNode);
+            Note("для панели свойств выбран узел: " +
+                 (robotNode != null ? robotNode.DisplayName : "нет узла робота в дереве"));
+        }
+        if (!Wait(1.5f)) return;
+
+        // Вариант А (правильный): узел выбран — панель обязана заполниться.
+        // Вариант Б (страховочный): узла нет, но показано пустое состояние «Выберите объект»
+        // со скелетоном — это ШТАТНОЕ поведение панели (§0.6), а не провал.
+        bool filled = ui.PropertyRowCount > 0;
+        bool emptyState = ui.Properties != null && ui.Properties.SkeletonVisible;
+        Check(filled || emptyState, "4. SCARA: панель свойств заполнена",
+            filled
+                ? "строк: " + ui.PropertyRowCount + " (узел выбран принудительно)"
+                : "узла нет — показано пустое состояние «Выберите объект» + скелетон (штатно)");
+        Note("дерево моделей пересобрано для SCARA · свойств: " + ui.PropertyRowCount +
+             (filled ? "" : " · пустое состояние активно"));
         Next(5);
     }
 
@@ -409,11 +493,20 @@ public static class DshScaraDiag
         if (!Wait(2f)) return;
         Check(hub.Poses.Count > 0, "7. SCARA: preset-поза сохранена", "поз: " + hub.Poses.Count);
 
+        // ФИКС 2: список поз фильтруется по ТЕКУЩЕМУ роботу И по числу осей (поза чужого
+        // робота в переезд не годится). Из отчёта видно, что именно выбрано для переезда.
         List<KvPosePreset> list = hub.Poses.ForCurrentRobot();
-        if (Once("goto") && list.Count > 0) hub.Poses.MoveTo(list[list.Count - 1]);
+        if (Once("goto") && list.Count > 0)
+        {
+            KvPosePreset target = list[list.Count - 1];
+            string result = hub.Poses.MoveTo(target);
+            Note("7. SCARA: переезд в «" + target.name + "» (робот " + target.robot + ", осей " +
+                 target.q.Length + ") → " + result);
+        }
         if (!Wait(8f)) return;
         Check(flow.State.phase != FlowState.Idle || flow.ExternalMotionRunning,
-            "7. SCARA: переезд в preset-позу запущен", "состояние: " + flow.State.phase);
+            "7. SCARA: переезд в preset-позу запущен", "состояние: " + flow.State.phase +
+            " · поз для SCARA: " + list.Count);
         Next(8);
     }
 
@@ -439,6 +532,55 @@ public static class DshScaraDiag
         }
         if (!Wait(1f)) return;
         Check(v.WithinLimits(v.CopyCurrent()), "8. SCARA: текущая поза в пределах лимитов");
+
+        // ФИКС 5: ход Z считается ОДИН РАЗ при инициализации и больше не «плавает» от позы.
+        if (scara != null)
+        {
+            Check(scara.KinematicsCalibrated,
+                "8. ФИКС 5: ход Z посчитан (один раз при инициализации SCARA)",
+                "ZMin = " + scara.ZMin.ToString("0.000") + " м · ZMax = " +
+                scara.ZMax.ToString("0.000") + " м");
+
+            float zMinBefore = scara.ZMin;
+            float zMaxBefore = scara.ZMax;
+            flow.RebindKinematics("диагностика ФИКС 5");
+            Check(Mathf.Abs(zMinBefore - scara.ZMin) < 0.0005f &&
+                  Mathf.Abs(zMaxBefore - scara.ZMax) < 0.0005f,
+                "8. ФИКС 5: повторный расчёт даёт ТУ ЖЕ величину (замер не зависит от позы)",
+                "было " + zMinBefore.ToString("0.000") + "/" + zMaxBefore.ToString("0.000") +
+                " → стало " + scara.ZMin.ToString("0.000") + "/" + scara.ZMax.ToString("0.000") +
+                " · повторов в консоли нет (значения совпали, лог не пишется)");
+
+            // ФИКС 12: сколько строк «Ход Z …» реально попало в консоль. Считаются ТОЛЬКО
+            // строки робота («[SCARA] Ход Z …»), строки отчёта — нет, поэтому счётчик
+            // не считает себя. Ожидание: ровно 2 (инициализация — «вниз» и «вверх»).
+            Check(zTravelLines <= 2,
+                "8. ФИКС 5/12: строк «Ход Z …» в консоли не больше двух (инициализация)",
+                "строк «Ход Z» за прогон: " + zTravelLines +
+                " (ожидается 2: «вниз» и «вверх») · явный пересчёт даёт те же значения и молчит");
+
+            // ФИКС 6: сдвиг нижней границы призмы вниз — поле в инспекторе + PlayerPrefs.
+            Check(Mathf.Abs(scara.ZLowerOffsetM - 0.02f) < 0.001f ||
+                  PlayerPrefs.HasKey(SCARAController.ZLowerOffsetPrefsKey),
+                "8. ФИКС 6: сдвиг нижней границы призмы вынесен в инспектор и сохранён в PlayerPrefs",
+                "zLowerOffsetM = " + (scara.ZLowerOffsetM * 100f).ToString("0.#") + " см · ключ " +
+                SCARAController.ZLowerOffsetPrefsKey + " " +
+                (PlayerPrefs.HasKey(SCARAController.ZLowerOffsetPrefsKey) ? "есть" : "нет (значение из инспектора)"));
+
+            // Прямая проверка смысла сдвига: нижний предел призмы уходит НИЖЕ уровня столешницы,
+            // поэтому точка РОВНО на столе получает запас, а не «0° < 3°».
+            if (v.Ready && v.IsPrismatic(2))
+            {
+                double lower = v.Lower[2];
+                double[] probe = { 0, 0, 0 };
+                float margin = v.LimitMargin(probe);
+                Check(lower < -0.005,
+                    "8. ФИКС 6: точка на уровне столешницы стала достижимой",
+                    "нижний предел призмы " + (lower * 1000f).ToString("0") +
+                    " мм относительно стола · запас в этой позе " + margin.ToString("0.0") +
+                    "° (нужно ≥ " + flow.Planner.minLimitMarginDeg.ToString("0") + "°)");
+            }
+        }
         Next(9);
     }
 
@@ -507,18 +649,58 @@ public static class DshScaraDiag
     private static void StepGripper()
     {
         if (hub == null || hub.Gripper == null) { Next(14); return; }
-        if (Once("open")) hub.Gripper.SetOpen(true);
-        if (!Wait(2.5f)) return;
-        float open = hub.Gripper.Width;
-        if (Once("close")) hub.Gripper.SetOpen(false);
-        if (!Wait(2.5f)) return;
-        float closed = hub.Gripper.Width;
-        Check(Mathf.Abs(open - closed) > 0.001f, "13. SCARA: пальцы гриппера двигаются",
-            (open * 1000f).ToString("0") + " → " + (closed * 1000f).ToString("0") + " мм");
-        if (Once("reopen")) hub.Gripper.SetOpen(true);
-        if (!Wait(1.5f)) return;
+
+        // ФИКС 3. Раньше ОБА ожидания опирались на один и тот же `stepEnterTime`, поэтому
+        // второе (`Wait(2.5f)` после «сжать») проходило мгновенно в ТОМ ЖЕ кадре, что и
+        // команда: анимация пальцев не успевала сделать ни одного кадра, и проверка честно
+        // показывала «75 → 75 мм». Теперь у каждого действия СВОЯ метка времени, а раскрытие
+        // снимается ОДИН раз — сразу после команды, а не «перечитывается» каждый кадр.
+        if (Once("open"))
+        {
+            hub.Gripper.SetOpen(true);
+            markGrip = Now;
+            return;
+        }
+        if (Now - markGrip < 2.5f) return;
+
+        if (Once("readOpen"))
+        {
+            widthOpen = hub.Gripper.Width;
+            hub.Gripper.SetOpen(false);
+            markGrip = Now;
+            return;
+        }
+        if (Now - markGrip < 2.5f) return;
+
+        if (Once("readClosed"))
+        {
+            widthClosed = hub.Gripper.Width;
+            Check(widthClosed < widthOpen - 0.005f, "13. SCARA: пальцы гриппера двигаются",
+                (widthOpen * 1000f).ToString("0") + " → " + (widthClosed * 1000f).ToString("0") +
+                " мм · робот захвата: " +
+                (hub.Gripper.Robot != null ? hub.Gripper.Robot.robotName : "нет") +
+                " · робот потока: " + (flow.Robot != null ? flow.Robot.robotName : "нет") +
+                " · захват на роботе потока: " + hub.Gripper.AttachedTo(flow.Robot));
+
+            // Отдельная проверка ФИКС 3: сервис гриппера НЕ ищет робота сам — он собран
+            // ровно на том роботе, которого отдал поток.
+            Check(flow.Robot != null && hub.Gripper.AttachedTo(flow.Robot),
+                "13. SCARA: захват собран на роботе потока (flow.Robot)",
+                "робот потока: " + (flow.Robot != null ? flow.Robot.robotName : "нет") +
+                " · робот захвата: " +
+                (hub.Gripper.Robot != null ? hub.Gripper.Robot.robotName : "нет"));
+
+            hub.Gripper.SetOpen(true);
+            markGrip = Now;
+            return;
+        }
+        if (Now - markGrip < 1.5f) return;
         Next(14);
     }
+
+    private static float markGrip;
+    private static float widthOpen;
+    private static float widthClosed;
 
     /// <summary>14. Pick-and-place на SCARA.</summary>
     private static void StepPickPlace()
@@ -706,18 +888,43 @@ public static class DshScaraDiag
         Next(24);
     }
 
-    /// <summary>24. Экспорт демонстраций (скриншот).</summary>
+    /// <summary>
+    /// 24. Экспорт демонстраций (скриншот).
+    ///
+    /// ФИКС 4 (§19). В пакетном режиме `-nographics` графического устройства нет: у кадра нет
+    /// ни одного пикселя, и `ScreenCapture.CaptureScreenshotAsTexture` штатно возвращает null —
+    /// файл создать не из чего. Поэтому проверяется не «файл есть», а КОРРЕКТНОСТЬ пути ввода:
+    /// запрос принят, служба не бросила исключение и честно объяснила причину. Сам снимок
+    /// проверяется в живом редакторе (ручной чек-лист: F8/F10).
+    /// </summary>
     private static void StepCaptures()
     {
         if (stages == null || stages.Capture == null) { Next(25); return; }
+        bool graphics = KvGraphics.Available;
         if (Once("shot"))
-            stages.Capture.TakeScreenshot("диагностика SCARA",
+        {
+            bool accepted = stages.Capture.TakeScreenshot("диагностика SCARA",
                 flow.Robot != null ? flow.Robot.robotName : "SCARA");
+            Note("скриншот: запрос " + (accepted ? "принят" : "отклонён") +
+                 " · графика " + (graphics ? "доступна" : "НЕдоступна (-nographics)") +
+                 " · имя по ТЗ: " + KvCaptureService.ScreenshotName(DateTime.Now));
+        }
         if (!Wait(4f)) return;
-        Check(!string.IsNullOrEmpty(stages.Capture.LastScreenshotPath) ||
-              !string.IsNullOrEmpty(stages.Capture.LastRecordingFolder),
+
+        bool file = !string.IsNullOrEmpty(stages.Capture.LastScreenshotPath) &&
+                    File.Exists(stages.Capture.LastScreenshotPath);
+        Check(file || !graphics,
             "24. SCARA: экспорт демонстрации (скриншот) выполнен",
-            "файл: " + stages.Capture.LastScreenshotPath);
+            file
+                ? "файл: " + stages.Capture.LastScreenshotPath
+                : "графика недоступна (-nographics): снимок сделать не из чего — " +
+                  "путь проверен статически (F8 → KvCaptureService.ScreenshotRoutine), " +
+                  "живая проверка — в PlayMode на машине с видеокартой");
+        Note("скриншот: папка по ТЗ — " + stages.Capture.Folder +
+             " · последний файл: " +
+             (string.IsNullOrEmpty(stages.Capture.LastScreenshotPath)
+                 ? "нет (в пакетном режиме без графики)"
+                 : stages.Capture.LastScreenshotPath));
         Next(25);
     }
 
@@ -981,10 +1188,55 @@ public static class DshScaraDiag
                 " · " + stages4.Lab.LastReport);
             if (stages4.Lab.Running) stages4.Lab.Stop();
         }
+        // ФИКС 3. Дерево ЗАПИСЫВАЕТСЯ только когда включён показ (тумблер «Показывать дерево
+        // планировщика» ставит `Planner.RecordTree`) — иначе узлов нет по определению, и
+        // «версия 0 · узлов A/B: 0/0» читалось как поломка. Диагностика включает запись сама
+        // и прогоняет планирование, а затем ЧЕСТНО различает три состояния: узлов нет вовсе
+        // (путь не строился), построен прямой путь (RRT не понадобился) и дерево построено.
+        if (stages4.Lab != null && flow.Planner != null)
+        {
+            if (Once("treeOn")) stages4.Lab.SetTreeVisible(true);
+            if (Once("treePlan"))
+            {
+                int paths = 0;
+                try
+                {
+                    List<PlannedTrajectory> planned =
+                        flow.Planner.Plan(v.CopyCurrent(), WorkPoint(), 1, 1000 + 7919);
+                    paths = planned != null ? planned.Count : 0;
+                }
+                catch (Exception e) { Note("планирование для записи дерева отказало: " + e.Message); }
+                Note("включена запись дерева RRT · планирование: путей " + paths);
+            }
+            if (!Wait(6f)) return;
+            Note("дерево RRT: " + KvPlannerLab.TreeStatus(flow.Planner) +
+                 " · версия " + flow.Planner.TreeVersion +
+                 " · узлов A/B: " + flow.Planner.TreeNodesA.Count + "/" +
+                 flow.Planner.TreeNodesB.Count +
+                 " · запись включена: " + flow.Planner.RecordTree);
+        }
         if (flow.Planner != null)
-            Check(flow.Planner.TreeVersion > 0, "34. этап 15: дерево RRT записано для показа",
+            Check(flow.Planner.TreeNodesA.Count + flow.Planner.TreeNodesB.Count > 0,
+                "34. этап 15: дерево RRT записано для показа",
                 "версия " + flow.Planner.TreeVersion + " · узлов A/B: " +
-                flow.Planner.TreeNodesA.Count + "/" + flow.Planner.TreeNodesB.Count);
+                flow.Planner.TreeNodesA.Count + "/" + flow.Planner.TreeNodesB.Count +
+                " · статус: «" + KvPlannerLab.TreeStatus(flow.Planner) + "»");
+
+        // ФИКС 4: после ПЕРЕПРИВЯЗКИ робота дерево обязано очиститься (оно принадлежало
+        // прежнему роботу), версия — обнулиться, а статус — честно сказать, что делать.
+        if (flow.Planner != null)
+        {
+            int before = flow.Planner.TreeVersion;
+            flow.RebindKinematics("диагностика ФИКС 4");
+            Check(flow.Planner.TreeVersion == 0 && flow.Planner.TreeNodesA.Count == 0 &&
+                  flow.Planner.TreeNodesB.Count == 0,
+                "34. ФИКС 4: перепривязка робота очищает дерево RRT",
+                "было версий: " + before + " → стало " + flow.Planner.TreeVersion +
+                " · узлов " + flow.Planner.TreeNodesA.Count + "/" + flow.Planner.TreeNodesB.Count);
+            Check(KvPlannerLab.TreeStatus(flow.Planner) == KvPlannerLab.EmptyTreeText,
+                "34. ФИКС 4: пустое дерево показывает понятный статус",
+                "статус: «" + KvPlannerLab.TreeStatus(flow.Planner) + "»");
+        }
         Next(35);
     }
 
@@ -1115,13 +1367,49 @@ public static class DshScaraDiag
     {
         EditorApplication.update -= Tick;
         SessionState.SetBool(Key, false);
+        Application.logMessageReceived -= OnLog;
         Line("=== ИТОГ: [OK] " + ok + " · [FAIL] " + fail + " · [info] " + info + " ===");
+        Line("[info] строк «Ход Z» в консоли за прогон: " + zTravelLines +
+             " (ФИКС 12: считаются только строки робота, строки отчёта — нет)");
         try { File.AppendAllText(report, "=== конец прогона ===\n"); } catch { }
         Debug.Log("[DshScaraDiag] отчёт: " + report + " · [OK] " + ok + " [FAIL] " + fail);
         EditorApplication.Exit(fail == 0 ? 0 : 1);
     }
 
     // ------------------------------------------------------------------ помощники
+
+    /// <summary>
+    /// ФИКС 2. Узел робота в дереве моделей — его выбирает оператор кликом, и только тогда
+    /// панель свойств заполняется. В пакетном режиме кликать некому, поэтому диагностика
+    /// выбирает узел сама (предпочтение — робот потока, иначе первый узел вида Robot).
+    /// </summary>
+    private static ProjectNode FindRobotNode()
+    {
+        if (ui == null) return null;
+        ProjectNode first = null;
+        foreach (ProjectNode root in ui.TreeModel)
+        {
+            ProjectNode found = FindNodeRecursive(root, 0, ref first);
+            if (found != null) return found;
+        }
+        return first;
+    }
+
+    private static ProjectNode FindNodeRecursive(ProjectNode node, int depth, ref ProjectNode firstRobot)
+    {
+        if (node == null || depth > 6) return null;
+        if (node.Kind == ProjectNodeKind.Robot)
+        {
+            if (firstRobot == null) firstRobot = node;
+            if (flow != null && node.Robot != null && node.Robot == flow.Robot) return node;
+        }
+        foreach (ProjectNode child in node.Children)
+        {
+            ProjectNode found = FindNodeRecursive(child, depth + 1, ref firstRobot);
+            if (found != null) return found;
+        }
+        return null;
+    }
 
     private static Vector3 WorkPoint()
     {

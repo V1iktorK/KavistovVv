@@ -37,7 +37,7 @@ public static class DshDesktopUiDiag
         SessionState.SetBool(SessionKey, false);
         // После домен-релоада статики обнуляются: путь отчёта и подписки восстанавливаем.
         if (string.IsNullOrEmpty(reportPath))
-            reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+            reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         Application.logMessageReceived -= OnLog;
         Application.logMessageReceived += OnLog;
         Subscribe();
@@ -45,7 +45,7 @@ public static class DshDesktopUiDiag
 
     public static void Run()
     {
-        reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+        reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         try { File.Delete(reportPath); } catch { }
         ok = 0; fail = 0; phase = 0; frames = 0; exceptions = 0;
 
@@ -109,7 +109,7 @@ public static class DshDesktopUiDiag
     private static void Line(string text)
     {
         if (string.IsNullOrEmpty(reportPath))
-            reportPath = Path.Combine(Application.dataPath, "..", ReportName);
+            reportPath = KazistovVvFeatures.FeatureStorage.ReportPath(ReportName);
         try { File.AppendAllText(reportPath, text + Environment.NewLine, Encoding.UTF8); } catch { }
     }
 
@@ -145,6 +145,14 @@ public static class DshDesktopUiDiag
 
         Info("команд в реестре: " + KvCommands.All.Count);
         Info("иконок в библиотеке: " + CountIcons());
+
+        // ФИКС 6/8 (§23): ЭТАЛОН РАЗМЕРОВ элементов интерфейса. В §22 метод KvWidgets.
+        // ValidateSizes() был написан, но не вызывался ниоткуда — здесь он прогоняется
+        // по-настоящему: галка 16×16/глиф 12, кнопка-иконка 24×24/глиф 0.78·24,
+        // кнопка с текстом 24, вкладка 26 (24…28), иконки «+»/«−» дерева из единого набора.
+        int sizeFailures = KvWidgets.ValidateSizesFailures();
+        if (sizeFailures > 0) Line(KvWidgets.ValidateSizes());
+        Check(sizeFailures == 0, "эталон размеров KvWidgets.ValidateSizes() — провалов " + sizeFailures);
         Next();
     }
 
@@ -388,7 +396,9 @@ public static class DshDesktopUiDiag
         KazistovVvUIManager ui = KazistovVvUIManager.Instance;
         ui.ShowSettings(0);
 
-        for (int tab = 0; tab < 5; tab++)
+        // Число вкладок берётся из KvSettingsView: новая вкладка («Графика») проверяется
+        // автоматически, а нумерация больше не «зашита» в диагностику.
+        for (int tab = 0; tab < KvSettingsView.TabCount; tab++)
         {
             ui.SettingsView.SetTab(tab);
             Check(ui.SettingsView.ActiveTab == tab && ui.SettingsView.RowCount > 0,
@@ -416,7 +426,20 @@ public static class DshDesktopUiDiag
         Check(hasVr, "есть заглушки VR / MR («будет добавлено позже»)");
         Info("внешние настройки: " + KvSettingsSchema.ExternalStatus);
 
-        ui.SettingsView.SetTab(4);
+        // Раздел «Графика» (сессия 18.09.2026): строк много, служба обязана быть поднята.
+        ui.SettingsView.SetTab(KvSettingsView.GraphicsTabIndex);
+        Check(ui.SettingsView.RowCount > 20,
+            "вкладка «Графика» заполнена, строк: " + ui.SettingsView.RowCount);
+        Check(KazistovVvFeatures.KvGraphicsService.Current != null,
+            "служба графики запущена (KvGraphicsService.Current != null)");
+        if (KazistovVvFeatures.KvGraphicsService.Current != null)
+        {
+            KazistovVvFeatures.KvGraphicsService g = KazistovVvFeatures.KvGraphicsService.Current;
+            Info("графика: режим " + g.Preset + " → " + g.EffectivePreset() +
+                 " · доступна: " + g.Available + " · " + g.PresetFileStatus);
+        }
+
+        ui.SettingsView.SetTab(KvSettingsView.HelpTabIndex);
         Check(ui.SettingsView.RowCount > 8,
             "вкладка «Справка» заполнена, строк: " + ui.SettingsView.RowCount);
         Next();

@@ -7,6 +7,17 @@ namespace KazistovVvUI
     /// Режим простоя камеры («как в Skyrim»): если пользователь ничего не делает
     /// (нет движения мыши, клавиш, стиков) — камера медленно облетает активного
     /// робота на небольшой высоте. Любое действие мгновенно возвращает управление.
+    ///
+    /// ФИКС 5 (§23) — ЧТО ЗДЕСЬ БЫЛО НЕ ТАК И ЧТО ИСПРАВЛЕНО:
+    ///   • облёт и <see cref="KazistovVvFeatures.FreeFlyCameraController"/> писали в один и
+    ///     тот же `transform` в одном кадре: облёт ставил поворот, а контроллер камеры
+    ///     в следующем кадре возвращал свой устаревший `yaw/pitch` — камера «колбасила».
+    ///     Теперь контроллер камеры на время облёта получает `ExternalCameraControl = true`
+    ///     и в камеру не лезет;
+    ///   • Lerp/Slerp считались с «сырым» `blendSpeed · dt`: при просадке кадра (а в проекте
+    ///     бывают тяжёлые кадры планирования) коэффициент прыгал, и камера дёргалась.
+    ///     Теперь сглаживание через `1 − exp(−k·dt)` и <see cref="Mathf.SmoothDamp"/> —
+    ///     одинаковое поведение при любом FPS и при любом `Application.targetFrameRate`.
     /// </summary>
     public class IdleCameraBrain : MonoBehaviour
     {
@@ -27,6 +38,10 @@ namespace KazistovVvUI
         private float orbitAngle;
         private Quaternion userRotation;
         private Vector3 userPosition;
+        private Vector3 positionVelocity;      // ФИКС 5: состояние SmoothDamp
+
+        /// <summary>Облёт идёт прямо сейчас (диагностика).</summary>
+        public bool Orbiting { get { return orbiting; } }
 
         /// <summary>Целевой робот для облёта (ставится UIManager'ом).</summary>
         public Transform OrbitTarget { get; set; }
@@ -48,6 +63,7 @@ namespace KazistovVvUI
                 {
                     // Возврат к позиции/повороту пользователя — плавно.
                     orbiting = false;
+                    SetExternalControl(false);
                 }
             }
             else if (!orbiting && Time.time - lastActivityTime > idleDelay)
@@ -55,13 +71,39 @@ namespace KazistovVvUI
                 orbiting = true;
                 userRotation = transform.rotation;
                 userPosition = transform.position;
+                orbitAngle = Mathf.Atan2(transform.position.z - Center().z,
+                    transform.position.x - Center().x);
+                positionVelocity = Vector3.zero;
                 if (OrbitTarget == null) OrbitTarget = FindActiveRobot();
+                SetExternalControl(true);
             }
 
             if (orbiting)
             {
                 DoOrbit(Time.deltaTime);
             }
+        }
+
+        /// <summary>Отдать/вернуть управление камерой контроллеру оператора (ФИКС 5).</summary>
+        private void SetExternalControl(bool value)
+        {
+            if (cameraRig == null) cameraRig = GetComponent<FreeFlyCameraController>();
+            if (cameraRig == null)
+            {
+                KazistovVvUIManager ui = KazistovVvUIManager.Instance;
+                if (ui != null) cameraRig = ui.CameraRig;
+            }
+            if (cameraRig != null) cameraRig.ExternalCameraControl = value;
+            if (!value && cameraRig != null) cameraRig.SyncAnglesFromTransform();
+        }
+
+        private FreeFlyCameraController cameraRig;
+
+        private Vector3 Center()
+        {
+            if (OrbitTarget != null) return OrbitTarget.position;
+            Transform robot = FindActiveRobot();
+            return robot != null ? robot.position : Vector3.zero;
         }
 
         private void DoOrbit(float dt)
@@ -78,10 +120,16 @@ namespace KazistovVvUI
             float rad = orbitAngle * Mathf.Deg2Rad;
             Vector3 targetPos = center + new Vector3(Mathf.Cos(rad) * orbitRadius, orbitHeight, Mathf.Sin(rad) * orbitRadius);
 
-            transform.position = Vector3.Lerp(transform.position, targetPos, blendSpeed * dt);
+            // ФИКС 5: SmoothDamp вместо Lerp с «сырым» blendSpeed·dt — движение не зависит
+            // от FPS и не дёргается на тяжёлых кадрах.
+            transform.position = Vector3.SmoothDamp(transform.position, targetPos,
+                ref positionVelocity, Mathf.Max(0.05f, 1f / Mathf.Max(0.2f, blendSpeed)), Mathf.Infinity, dt);
+
             Vector3 look = center + Vector3.up * 0.6f;
             Quaternion targetRot = Quaternion.LookRotation(look - transform.position, Vector3.up);
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, blendSpeed * dt * 2f);
+            // Кадронезависимое сглаживание поворота: 1 − exp(−k·dt).
+            float k = 1f - Mathf.Exp(-Mathf.Max(0.2f, blendSpeed * 2f) * dt);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, k);
         }
 
         private static Transform FindActiveRobot()
@@ -129,6 +177,16 @@ namespace KazistovVvUI
         public void PingActivity()
         {
             lastActivityTime = Time.time;
+            if (orbiting)
+            {
+                orbiting = false;
+                SetExternalControl(false);
+            }
+        }
+
+        private void OnDisable()
+        {
+            if (orbiting) SetExternalControl(false);
             orbiting = false;
         }
     }

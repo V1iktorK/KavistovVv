@@ -38,7 +38,7 @@ public static class DshStage2Diag
 
     public static void Run()
     {
-        report = Path.Combine(Application.dataPath, "..", "_dsh_stage2_verify.txt");
+        report = FeatureStorage.ReportPath("_dsh_stage2_verify.txt");
         try
         {
             File.WriteAllText(report,

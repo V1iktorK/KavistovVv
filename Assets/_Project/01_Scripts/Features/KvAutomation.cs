@@ -1854,10 +1854,17 @@ namespace KazistovVvFeatures
         private void AddTool(RectTransform parent, string label, Action action)
         {
             Button b = KvTheme.CreateSmallButton(parent, "B" + label, label, action);
+            // ФИКС 5/6 (§22): размеры кнопок панели инструментов редактора дерева задаются ЯВНО.
+            // Строка KvWidgets.CreateRow не управляет размером детей, поэтому LayoutElement
+            // игнорировался, и каждая кнопка рисовалась квадратом 100×100 — отсюда
+            // «очень большие иконки» в окне «Дерево поведения».
+            float width = Mathf.Max(60f, label.Length * 8f + 14f);
             LayoutElement le = b.gameObject.AddComponent<LayoutElement>();
             le.minHeight = 24f;
             le.preferredHeight = 24f;
-            le.minWidth = Mathf.Max(60f, label.Length * 8f + 14f);
+            le.minWidth = width;
+            le.preferredWidth = width;
+            ((RectTransform)b.transform).sizeDelta = new Vector2(width, 24f);
         }
 
         private void Update()

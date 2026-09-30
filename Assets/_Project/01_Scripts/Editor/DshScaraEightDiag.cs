@@ -44,12 +44,12 @@ public static class DshScaraEightDiag
 
     public static void Run()
     {
-        // ВАЖНО (§12.10): файл ВНУТРИ проекта (OneDrive) во время PlayMode не дописывается —
-        // прогон DshScaraDiag это уже показал (отчёт оставался из одной строки). Поэтому отчёт
-        // пишется в профиль пользователя, ВНЕ синхронизируемой папки; после прогона он
-        // копируется в проект как артефакт сессии. Строки всё равно дублируются в лог Unity.
-        report = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "_dsh_scara8_verify.txt");
+        // ВАЖНО (§12.10, ФИКС 10): файл ВНУТРИ проекта (OneDrive) во время PlayMode не
+        // дописывается — прогон DshScaraDiag это уже показал (отчёт оставался из одной строки).
+        // Отчёт пишется в общий каталог отчётов <persistentDataPath>/KazistovVv/Reports —
+        // это локальный каталог вне синхронизации (раньше писали в профиль пользователя).
+        // Строки всё равно дублируются в лог Unity.
+        report = FeatureStorage.ReportPath("_dsh_scara8_verify.txt");
         try
         {
             File.WriteAllText(report,

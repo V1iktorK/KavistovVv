@@ -35,7 +35,7 @@ public static class DshStage4Diag
 
     public static void Run()
     {
-        report = Path.Combine(Application.dataPath, "..", "_dsh_s4_verify.txt");
+        report = FeatureStorage.ReportPath("_dsh_s4_verify.txt");
         try
         {
             File.WriteAllText(report,
@@ -435,9 +435,13 @@ public static class DshStage4Diag
         int version = planner != null ? planner.TreeVersion : 0;
         int iterations = planner != null ? planner.TreeIterations : 0;
         Note("этап 15: узлов дерева " + nodesA + " + " + nodesB + " · версия " + version +
-             " · итераций " + iterations + " · запись включена: " + Planner.RecordTree);
-        Check(Planner.RecordTree, "этап 15: запись дерева включается вместе с показом",
-            "RecordTree=" + Planner.RecordTree + ", TreeVisible=" + lab.TreeVisible);
+             " · итераций " + iterations + " · запись включена: " +
+             (planner != null && planner.RecordTree));
+        Check(planner != null && planner.RecordTree,
+            "этап 15: запись дерева включается вместе с показом",
+            "RecordTree=" + (planner != null && planner.RecordTree) +
+            " (запрос визуализатора " + Planner.RecordTreeRequested + "), TreeVisible=" +
+            lab.TreeVisible);
         Check(version > 0 && nodesA + nodesB > 1,
             "этап 15: планировщик записал узлы дерева (есть что показывать)",
             "версия " + version + " · узлов " + (nodesA + nodesB));
@@ -1183,7 +1187,10 @@ public static class DshStage4Diag
 
         if (Once("srt"))
         {
-            string path = titles.ExportSrt(Path.Combine(Application.dataPath, "..", "_dsh_s4_out"),
+            // ФИКС 11: субтитры — тоже отчётный файл, поэтому идут в ЕДИНЫЙ каталог отчётов
+            // (<persistentDataPath>/KazistovVv/Reports), а НЕ в корень проекта: проект в OneDrive,
+            // и во время PlayMode файл там не дописывается (§13.11).
+            string path = titles.ExportSrt(KazistovVvFeatures.FeatureStorage.ReportsDir,
                 "KazistovVv_subtitles");
             Check(!string.IsNullOrEmpty(path) && File.Exists(path),
                 "этап 32: субтитры выгружены в .srt", path);

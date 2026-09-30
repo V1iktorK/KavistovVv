@@ -29,7 +29,7 @@ public static class DshFeaturesDiag
     /// перезагрузку домена при входе в PlayMode (иначе писали бы в null).</summary>
     private static string ReportPath
     {
-        get { return Path.Combine(Application.dataPath, "..", "_dsh_features_verify.txt"); }
+        get { return FeatureStorage.ReportPath("_dsh_features_verify.txt"); }
     }
 
     private static int step;

@@ -28,7 +28,9 @@ public static class DshFullVerifyDiag
 
     private static string ReportPath
     {
-        get { return Path.Combine(Application.dataPath, "..", "_dsh_full_verify.txt"); }
+        // ФИКС 10: отчёт — в <persistentDataPath>/KazistovVv/Reports (проект в OneDrive,
+        // во время PlayMode файл там не дописывался — §13.11).
+        get { return FeatureStorage.ReportPath("_dsh_full_verify.txt"); }
     }
 
     // ---------------------------------------------------------------- состояние прогона

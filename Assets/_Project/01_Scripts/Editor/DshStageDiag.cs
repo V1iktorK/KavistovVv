@@ -36,7 +36,7 @@ public static class DshStageDiag
 
     public static void Run()
     {
-        report = Path.Combine(Application.dataPath, "..", "_dsh_stage_verify.txt");
+        report = FeatureStorage.ReportPath("_dsh_stage_verify.txt");
         try { File.WriteAllText(report, "=== DshStageDiag · этапы 1–8 ===\n"); }
         catch (Exception e) { Debug.LogError("[DshStageDiag] отчёт не создан: " + e.Message); }
 

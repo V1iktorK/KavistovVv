@@ -83,19 +83,26 @@ namespace KazistovVvUI
             bg.raycastTarget = true;
 
             // --- строка инструментов дерева (развернуть/свернуть всё)
-            RectTransform bar = KvWidgets.CreateRow(root, "TreeBar", 18f, 2f);
+            // ФИКС 8 (§23): ЭТО И БЫЛИ «НЕПОНЯТНЫЕ + И −» СО СКРИНШОТА ОПЕРАТОРА.
+            // Здесь две кнопки-иконки: «expand» рисуется как «+» и раскрывает дерево целиком,
+            // «collapse» — как «−» и сворачивает его до корневых узлов. Полезны, поэтому
+            // оставлены (вариант Б ТЗ), но приведены к эталону: квадрат 24×24 (было —
+            // квадрат 100×100, потому что `CreateRow` не управляет размерами детей,
+            // а `LayoutElement` в таком режиме Unity игнорирует), глиф 0.78·24 ≈ 19,
+            // подсказки у обеих кнопок уже были — теперь они попадают точно в кнопку.
+            RectTransform bar = KvWidgets.CreateRow(root, "TreeBar", KvWidgets.IconButtonSize, 2f);
             bar.anchorMin = new Vector2(0f, 1f);
             bar.anchorMax = new Vector2(1f, 1f);
             bar.pivot = new Vector2(0.5f, 1f);
-            bar.sizeDelta = new Vector2(0f, 18f);
+            bar.sizeDelta = new Vector2(0f, KvWidgets.IconButtonSize);
             bar.anchoredPosition = Vector2.zero;
 
-            KvIconButton expandAll = KvWidgets.IconButton(bar, "ExpandAll", "expand", 14f,
-                ExpandAll);
+            KvIconButton expandAll = KvWidgets.IconButton(bar, "ExpandAll", "expand",
+                KvWidgets.IconButtonSize, ExpandAll);
             expandAll.Tooltip.Set("Раскрыть все узлы", "Развернуть дерево целиком");
             expandAll.SetChecked(false);
-            KvIconButton collapseAll = KvWidgets.IconButton(bar, "CollapseAll", "collapse", 14f,
-                CollapseAll);
+            KvIconButton collapseAll = KvWidgets.IconButton(bar, "CollapseAll", "collapse",
+                KvWidgets.IconButtonSize, CollapseAll);
             collapseAll.Tooltip.Set("Свернуть все узлы", "Оставить только корневые узлы");
             collapseAll.SetChecked(false);
 
@@ -110,7 +117,7 @@ namespace KazistovVvUI
             viewport.anchorMin = Vector2.zero;
             viewport.anchorMax = Vector2.one;
             viewport.offsetMin = new Vector2(2f, 2f);
-            viewport.offsetMax = new Vector2(-2f, -20f);
+            viewport.offsetMax = new Vector2(-2f, -(KvWidgets.IconButtonSize + 2f));
 
             scroll = scrollGo.GetComponent<ScrollRect>();
             scroll.horizontal = false;
@@ -526,6 +533,40 @@ namespace KazistovVvUI
             selected = node;
             SetSelected(node);
             if (onSelect != null) onSelect(node);
+        }
+
+        /// <summary>
+        /// ФИКС 9 (§22): узлы РОВНО в том порядке, в каком они видны в дереве (сверху вниз).
+        /// Нужно навигации с клавиатуры: ↑/↓ ходят по этому списку. Только чтение —
+        /// ни выделение, ни раскрытие узлов не меняются.
+        /// </summary>
+        public List<ProjectNode> VisibleNodes()
+        {
+            List<ProjectNode> result = new List<ProjectNode>();
+            for (int i = 0; i < rows.Count; i++)
+            {
+                GameObject rowGo = rows[i];
+                if (rowGo == null) continue;
+                KvTreeRow row = rowGo.GetComponent<KvTreeRow>();
+                if (row == null || row.Node == null) continue;
+                result.Add(row.Node);
+            }
+            return result;
+        }
+
+        /// <summary>Раскрыт ли узел (по ключу) — используется навигацией стрелками.</summary>
+        public bool IsExpandedNode(ProjectNode node)
+        {
+            return node != null && IsExpanded(node.Key);
+        }
+
+        /// <summary>Свернуть узел (навигация стрелками).</summary>
+        public void Collapse(ProjectNode node)
+        {
+            if (node == null || node.Children == null || node.Children.Count == 0) return;
+            if (!expanded.Contains(node.Key)) return;
+            expanded.Remove(node.Key);
+            if (onExpansionChanged != null) onExpansionChanged();
         }
 
         /// <summary>Начать переименование узла (двойной клик).</summary>

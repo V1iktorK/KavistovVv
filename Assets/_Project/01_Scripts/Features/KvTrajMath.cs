@@ -191,6 +191,134 @@ namespace KazistovVvFeatures
             return true;
         }
 
+        // ================================================================== УПЛОТНЕНИЕ ПУТИ
+
+        /// <summary>
+        /// ШАГ УПЛОТНЕНИЯ по умолчанию (в нормированных единицах пути: 1 единица ≈ 90°
+        /// вращательного сустава или 10 см призматического). 0.004 ≈ 0.36° на сэмпл —
+        /// при таком шаге «ступенька скорости» на границе сэмплов не видна глазом
+        /// (см. <see cref="Densify"/>).
+        /// </summary>
+        public const double DefaultDensifyStep = 0.004;
+
+        /// <summary>
+        /// УПЛОТНЕНИЕ ПУТИ (ФИКС §27). Исполнитель (`TrajectoryExecutor`) интерполирует позу
+        /// между соседними сэмплами ЛИНЕЙНО, поэтому внутри сэмпла скорость постоянна, а на
+        /// границе — мгновенно меняется. Чем РЕЖЕ сэмплы, тем больше эта «ступенька», и именно
+        /// она читается глазом как дёрг. Одного S-профиля мало: он распределяет ВРЕМЯ, но
+        /// геометрию задаёт путь, и при 40 сэмплах (`KvPlanKit.MakeJointPlan`) ступенька
+        /// остаётся крупной.
+        ///
+        /// Функция вставляет дополнительные сэмплы ВДОЛЬ ТОЙ ЖЕ полилинии пути (геометрия не
+        /// меняется ни на йоту — используется то же кратчайшее доворачивание суставов, что у
+        /// планировщика и фантомов), так что:
+        ///   • путь остаётся ровно тем же (никакой новой кинематики и никаких новых проверок);
+        ///   • ступенька скорости на границе сэмпла уменьшается пропорционально уплотнению.
+        ///
+        /// Возвращает НОВЫЙ план (исходный не меняется) либо <c>null</c>, если уплотнять нечего
+        /// (путь уже достаточно плотный, или путь вырожден, или сэмплов стало бы слишком много).
+        /// </summary>
+        public static PlannedTrajectory Densify(PoseValidator v, PlannedTrajectory plan,
+            double maxStepUnits = DefaultDensifyStep, int maxSamples = 2400)
+        {
+            if (v == null || !v.Ready || plan == null || plan.Path == null) return null;
+            int n = plan.Path.Length;
+            if (n < 2) return null;
+
+            int dof = plan.Path[0].Length;
+            var scale = new double[dof];
+            for (int j = 0; j < dof; j++) scale[j] = v.IsPrismatic(j) ? PrisScale : RevScale;
+
+            // Длина каждого отрезка в нормированных единицах.
+            var seg = new double[n - 1];
+            double total = 0.0;
+            for (int i = 0; i + 1 < n; i++)
+            {
+                double d = 0.0;
+                for (int j = 0; j < dof; j++)
+                {
+                    double delta = (plan.Path[i + 1][j] - plan.Path[i][j]) * scale[j];
+                    d += delta * delta;
+                }
+                seg[i] = Math.Sqrt(d);
+                total += seg[i];
+            }
+            if (total < 1e-6) return null;                        // путь нулевой длины — нечего уплотнять
+
+            double step = Math.Max(1e-4, maxStepUnits);
+            // Сколько сэмплов получится; если больше предела — увеличиваем шаг (не режем путь).
+            int wanted = 0;
+            for (int i = 0; i < seg.Length; i++)
+                wanted += Math.Max(1, (int)Math.Ceiling(seg[i] / step));
+            wanted += 1;
+            if (wanted > maxSamples)
+            {
+                if (total / Math.Max(1, maxSamples - 1) >= step) return null;   // путь и так предельно плотный
+                step = total / Math.Max(1, maxSamples - 1);
+                wanted = maxSamples;
+            }
+            if (wanted <= n) return null;                         // плотнее уже некуда — не трогаем
+
+            var dense = new double[wanted][];
+            var times = new float[wanted];
+            int k = 0;
+            double travelled = 0.0;
+            for (int i = 0; i + 1 < n && k < wanted; i++)
+            {
+                int steps = Math.Max(1, (int)Math.Ceiling(seg[i] / step));
+                for (int s = 0; s < steps && k < wanted; s++)
+                {
+                    double f = (double)s / steps;
+                    dense[k] = InterpConfig(plan.Path[i], plan.Path[i + 1], f, v);
+                    // Время — пропорционально пройденному пути; его всё равно пересчитает
+                    // S-профиль, но массив обязан быть монотонным и той же длины.
+                    times[k] = (float)(total > 1e-9 ? (travelled + seg[i] * f) / total : 0.0);
+                    k++;
+                }
+                travelled += seg[i];
+            }
+            // Последний сэмпл — РОВНО конец исходного пути (та же ссылка на конфигурацию цели).
+            if (k < wanted)
+            {
+                dense[k] = plan.Path[n - 1];
+                times[k] = 1f;
+                k++;
+            }
+            if (k < 2) return null;
+
+            PlannedTrajectory copy = Clone(plan, plan.Label);
+            if (k != wanted)
+            {
+                Array.Resize(ref dense, k);
+                Array.Resize(ref times, k);
+            }
+            copy.Path = dense;
+            copy.Times = times;
+            copy.Time = times[k - 1];
+            return copy;
+        }
+
+        /// <summary>
+        /// Промежуточная конфигурация между a и b: вращательные суставы — по КРАТЧАЙШЕМУ
+        /// довороту (как `Planner.Interp` и `PhantomManager.LerpPose`), призматические — линейно.
+        /// Единая семантика нужна, чтобы уплотнение не изменило геометрию пути.
+        /// </summary>
+        private static double[] InterpConfig(double[] a, double[] b, double f, PoseValidator v)
+        {
+            int dof = Math.Min(a.Length, b.Length);
+            var q = new double[dof];
+            for (int j = 0; j < dof; j++)
+            {
+                if (v != null && v.IsPrismatic(j)) q[j] = a[j] + (b[j] - a[j]) * f;
+                else
+                {
+                    double d = Mathf.DeltaAngle((float)a[j], (float)b[j]);
+                    q[j] = a[j] + d * f;
+                }
+            }
+            return q;
+        }
+
         // ================================================================== производные и метрики
 
         /// <summary>Дискретная производная по времени (центральные разности внутри, односторонние на краях).</summary>
@@ -360,6 +488,127 @@ namespace KazistovVvFeatures
             return result;
         }
 
+        // ================================================================== ФИКС 3: изломы пути
+
+        /// <summary>
+        /// ПОРОГ ИЗЛОМА по умолчанию (ФИКС 3 §20), градусы: угол между соседними сегментами
+        /// пути в нормированном пространстве суставов. Выше порога участок считается изломом —
+        /// именно на нём предел скорости вдоль пути близок к нулю и траектория «вязнет».
+        /// </summary>
+        public const float SharpCornerDeg = 35f;
+
+        /// <summary>
+        /// ПОИСК ИЗЛОМОВ ПУТИ (ФИКС 3 §20). Возвращает индексы сэмплов, в которых угол между
+        /// направлением «до» и «после» больше порога (по возрастанию). Считается в НОРМИРОВАННОМ
+        /// пространстве суставов (см. <see cref="Norm"/>) — той же метрике, в которой строится
+        /// S-профиль, поэтому найденный излом и есть та точка, где профиль тормозит.
+        ///
+        /// Геометрия пути здесь НЕ меняется: метод только СООБЩАЕТ о проблемных участках —
+        /// лечит их сглаживание (см. <see cref="SmoothCorners"/>).
+        /// </summary>
+        public static int[] FindSharpCorners(double[][] path, double[] scale, float thresholdDeg)
+        {
+            List<int> found = new List<int>();
+            if (path == null || path.Length < 3 || path[0] == null) return found.ToArray();
+
+            float thr = Mathf.Clamp(thresholdDeg, 1f, 179f);
+            double cosThreshold = Math.Cos(thr * Math.PI / 180.0);
+            int dof = path[0].Length;
+
+            for (int i = 1; i + 1 < path.Length; i++)
+            {
+                double dot = 0.0, na = 0.0, nb = 0.0;
+                for (int j = 0; j < dof; j++)
+                {
+                    double sc = scale != null && j < scale.Length && scale[j] > 1e-9 ? scale[j] : 1.0;
+                    double a = (path[i][j] - path[i - 1][j]) * sc;
+                    double b = (path[i + 1][j] - path[i][j]) * sc;
+                    dot += a * b;
+                    na += a * a;
+                    nb += b * b;
+                }
+                if (na < 1e-18 || nb < 1e-18) continue;      // сэмпл-«дубль»: направления нет
+                if (dot / Math.Sqrt(na * nb) < cosThreshold) found.Add(i);
+            }
+            return found.ToArray();
+        }
+
+        /// <summary>То же для готового плана: нормировка берётся по типу каждого сустава.</summary>
+        public static int[] FindSharpCorners(PoseValidator v, PlannedTrajectory plan, float thresholdDeg)
+        {
+            if (v == null || !v.Ready || plan == null || plan.Path == null || plan.Path.Length < 3)
+                return new int[0];
+            int dof = plan.Path[0].Length;
+            double[] scale = new double[dof];
+            for (int j = 0; j < dof; j++) scale[j] = Norm(v, j);
+            return FindSharpCorners(plan.Path, scale, thresholdDeg);
+        }
+
+        /// <summary>Самый острый излом пути, градусы (0 — путь прямой или короче трёх сэмплов).</summary>
+        public static float MaxCornerDeg(PoseValidator v, PlannedTrajectory plan)
+        {
+            if (v == null || !v.Ready || plan == null || plan.Path == null || plan.Path.Length < 3)
+                return 0f;
+            int dof = plan.Path[0].Length;
+            double[] scale = new double[dof];
+            for (int j = 0; j < dof; j++) scale[j] = Norm(v, j);
+
+            float worst = 0f;
+            for (int i = 1; i + 1 < plan.Path.Length; i++)
+            {
+                double dot = 0.0, na = 0.0, nb = 0.0;
+                for (int j = 0; j < dof; j++)
+                {
+                    double a = (plan.Path[i][j] - plan.Path[i - 1][j]) * scale[j];
+                    double b = (plan.Path[i + 1][j] - plan.Path[i][j]) * scale[j];
+                    dot += a * b;
+                    na += a * a;
+                    nb += b * b;
+                }
+                if (na < 1e-18 || nb < 1e-18) continue;
+                double cos = Mathf.Clamp((float)(dot / Math.Sqrt(na * nb)), -1f, 1f);
+                float angle = (float)(Math.Acos(cos) * 180.0 / Math.PI);
+                if (angle > worst) worst = angle;
+            }
+            return worst;
+        }
+
+        /// <summary>
+        /// ТОЧЕЧНОЕ СГЛАЖИВАНИЕ ИЗЛОМОВ (ФИКС 3 §20, опция «сглаживать только изломы»).
+        /// Обычное сглаживание применяется НЕ ко всему пути, а только к сэмплам в окрестности
+        /// найденных изломов (линейное затухание к краю окна). Остальной путь остаётся ровно
+        /// таким, каким его построил планировщик, — форма траектории не «портится» целиком.
+        /// Концы не двигаются: инвариант сглаживания этапа 4 сохраняется.
+        /// </summary>
+        public static double[][] SmoothCorners(double[][] path, int[] corners, KvSmoothMethod method,
+            float level, int radius = 3)
+        {
+            if (path == null || path.Length < 4 || corners == null || corners.Length == 0)
+                return CopyPath(path);
+
+            double[][] full = Smooth(path, method, level);
+            double[][] result = CopyPath(path);
+            int dof = path[0].Length;
+            int r = Mathf.Clamp(radius, 1, 32);
+
+            for (int i = 0; i < path.Length; i++)
+            {
+                int nearest = int.MaxValue;
+                for (int c = 0; c < corners.Length; c++)
+                {
+                    int d = Math.Abs(i - corners[c]);
+                    if (d < nearest) nearest = d;
+                }
+                if (nearest > r) continue;
+
+                double w = 1.0 - (double)nearest / (r + 1);   // 1 в центре излома → 0 на краю окна
+                if (i == 0 || i == path.Length - 1) w = 0.0;  // концы не смещаются (этап 4)
+                for (int j = 0; j < dof; j++)
+                    result[i][j] = path[i][j] * (1.0 - w) + full[i][j] * w;
+            }
+            return result;
+        }
+
         /// <summary>Кубический B-сплайн: проходы маски [1,4,1]/6 (2…10 проходов по уровню).</summary>
         private static double[][] BSplinePass(double[][] path, int dof, int n, float level)
         {
@@ -493,7 +742,7 @@ namespace KazistovVvFeatures
         /// </summary>
         public static PlannedTrajectory Retime(PoseValidator v, PlannedTrajectory source,
             KvMotionLimits limits, float accelScale = 1f, float velScale = 1f, string label = null,
-            bool jerkLimited = true)
+            bool jerkLimited = true, bool publishProfileNote = true)
         {
             if (v == null || !v.Ready || source == null || source.Path == null || source.Path.Length < 2)
                 return null;
@@ -629,10 +878,16 @@ namespace KazistovVvFeatures
                 Array.Copy(TimesFromProfile(s, vel), times, n);
                 profileNote = "пересчёт времени без ограничения рывка";
             }
-            LastProfileNote = profileNote;
-            LastProfileJerk = jerkPeak;
-            LastProfileClamped = clamped;
-            LastProfileApplicable = true;
+            // ФИКС 2 (§20): `publishProfileNote = false` используется планировщиком — он считает
+            // профиль «внутри себя» при построении каждой траектории и НЕ должен затирать строку
+            // о последнем профиле, которую показывает вкладка «Время-оптимальная» оператору.
+            if (publishProfileNote)
+            {
+                LastProfileNote = profileNote;
+                LastProfileJerk = jerkPeak;
+                LastProfileClamped = clamped;
+                LastProfileApplicable = true;
+            }
 
             plan.Times = times;
             plan.Time = times[n - 1];

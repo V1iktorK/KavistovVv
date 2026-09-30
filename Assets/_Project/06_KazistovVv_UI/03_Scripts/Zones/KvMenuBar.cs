@@ -368,6 +368,93 @@ namespace KazistovVvUI
         /// <summary>Сколько строк в открытом выпадающем списке (диагностика).</summary>
         public int DropdownRowCount { get { return dropdownRows.Count; } }
 
+        // ================================================================== ФИКС 9 (§22)
+        // НАВИГАЦИЯ ПО МЕНЮ С КЛАВИАТУРЫ. Стрелками по меню ходит KvKeyboardNav, но само
+        // меню остаётся «немым»: наружу отдаются только чтение состояния и три операции
+        // (подсветить группу, подсветить строку, нажать строку). Логика меню не менялась.
+
+        /// <summary>Сколько групп в строке верхнего меню.</summary>
+        public int MenuCount { get { return Menus.Length; } }
+
+        /// <summary>Имя группы верхнего меню по индексу (null — вне диапазона).</summary>
+        public string MenuNameAt(int index)
+        {
+            return index >= 0 && index < Menus.Length ? Menus[index] : null;
+        }
+
+        /// <summary>Индекс открытой группы (−1 — меню закрыто).</summary>
+        public int OpenMenuIndex
+        {
+            get
+            {
+                for (int i = 0; i < Menus.Length; i++)
+                    if (Menus[i] == openMenu) return i;
+                return -1;
+            }
+        }
+
+        /// <summary>Подсветить группу верхнего меню клавиатурой (−1 — снять подсветку).</summary>
+        public void SetKeyboardHighlight(int index)
+        {
+            for (int i = 0; i < menuButtons.Count; i++)
+            {
+                if (menuButtons[i] == null) continue;
+                if (i == index)
+                    menuButtons[i].color = KvTheme.Ratio(KvTheme.ButtonHover, KvTheme.PanelHeader);
+                else if (i < Menus.Length && Menus[i] == openMenu)
+                    menuButtons[i].color = KvTheme.ButtonHover;      // открытая группа остаётся подсвеченной
+                else
+                    menuButtons[i].color = new Color(0f, 0f, 0f, 0f);
+                if (i < menuTexts.Count && menuTexts[i] != null)
+                    menuTexts[i].color = i == index ? KvTheme.TextMain : KvTheme.TextDim;
+            }
+        }
+
+        /// <summary>Сколько строк в открытом меню ДОСТУПНЫ навигации (разделители и заголовки — нет).</summary>
+        public int NavigableRowCount { get { return NavigableRows().Count; } }
+
+        /// <summary>Подсветить N-ю доступную строку открытого меню (−1 — снять подсветку).</summary>
+        public void HighlightRow(int index)
+        {
+            List<int> rows = NavigableRows();
+            for (int i = 0; i < rows.Count; i++)
+            {
+                Image img = dropdownRows[rows[i]] != null
+                    ? dropdownRows[rows[i]].GetComponent<Image>() : null;
+                if (img == null) continue;
+                img.color = i == index
+                    ? KvTheme.Ratio(KvTheme.ButtonHover, KvTheme.PanelBg)
+                    : new Color(0f, 0f, 0f, 0f);
+            }
+        }
+
+        /// <summary>Нажать N-ю доступную строку открытого меню (Enter). true — нажатие выполнено.</summary>
+        public bool ActivateRow(int index)
+        {
+            List<int> rows = NavigableRows();
+            if (index < 0 || index >= rows.Count) return false;
+            Button b = dropdownRows[rows[index]] != null
+                ? dropdownRows[rows[index]].GetComponent<Button>() : null;
+            if (b == null || !b.interactable) return false;
+            b.onClick.Invoke();
+            return true;
+        }
+
+        /// <summary>Индексы строк выпадающего списка, которые можно выбрать (в порядке сверху вниз).</summary>
+        private List<int> NavigableRows()
+        {
+            List<int> result = new List<int>();
+            for (int i = 0; i < dropdownRows.Count; i++)
+            {
+                GameObject row = dropdownRows[i];
+                if (row == null) continue;
+                Button b = row.GetComponent<Button>();
+                if (b == null || !b.interactable) continue;      // заголовок группы/разделитель — мимо
+                result.Add(i);
+            }
+            return result;
+        }
+
         private void Update()
         {
             // Клик по миру/панели закрывает меню (страховка, если блокер не поймал).

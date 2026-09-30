@@ -19,6 +19,16 @@ namespace KazistovVvFeatures
 
         public static int RegisteredCount { get { return registered; } }
 
+        /// <summary>ФИКС 13: сколько строк в таблице модуля (для теста покрытия 7 языков).</summary>
+        public static int RowCount { get { return Rows.Length; } }
+
+        /// <summary>ФИКС 13: ключ строки таблицы по номеру (для теста покрытия 7 языков).</summary>
+        public static string KeyAt(int index)
+        {
+            if (index < 0 || index >= Rows.Length) return "";
+            return Rows[index] != null && Rows[index].Length > 0 ? Rows[index][0] : "";
+        }
+
         public static string T(string key, string fallback)
         {
             return KvLoc.T(key, fallback);
@@ -702,32 +712,40 @@ namespace KazistovVvFeatures
             Row("fail.overload", "Перегрузка", "Overload", "过载", "Sobrecarga", "Überlast",
                 "Surcharge", "過負荷"),
             Row("fail.info",
-                "Отказ сустава: звено провисает по модели маятника с вязким трением (момент веса " +
-                "считает штатная модель нагрузки), потеря управления обесточивает ось и игнорирует её " +
-                "цель, отключение с фиксацией замораживает угол. Это не физический движок: динамика " +
-                "Ньютона–Эйлера, трение в редукторах и упругость не считаются.",
-                "Joint failure: the link sags as a pendulum with viscous friction (the gravity torque " +
-                "comes from the platform load model), loss of control de-energizes the axis and ignores " +
-                "its target, a brake-locked shutdown freezes the angle. This is not a physics engine: " +
-                "rigid-body dynamics, gearbox friction and elasticity are not simulated.",
-                "关节故障：连杆按带黏性摩擦的摆模型下垂（重力力矩由平台负载模型给出），" +
-                "失去控制会断电该轴并忽略其目标，抱闸停机则冻结角度。这不是物理引擎：" +
-                "不计刚体动力学、减速器摩擦与弹性。",
-                "Fallo de eje: el eslabón cae como un péndulo con fricción viscosa (el par de gravedad " +
-                "lo da el modelo de carga), la pérdida de control desenergiza el eje y su consigna se " +
-                "ignora, el bloqueo con freno congela el ángulo. No es un motor físico: no se calculan " +
-                "dinámica, fricción de reductores ni elasticidad.",
-                "Gelenkausfall: das Glied sinkt als Pendel mit viskoser Reibung (das Gewichtsmoment " +
-                "liefert das Lastmodell), Steuerungsverlust schaltet die Achse ab und ignoriert ihr " +
-                "Ziel, Bremsenstillstand friert den Winkel ein. Keine Physik-Engine: Dynamik, " +
-                "Getriebereibung und Elastizität werden nicht berechnet.",
-                "Panne d'axe : le segment descend comme un pendule à frottement visqueux (le couple de " +
-                "gravité vient du modèle de charge), la perte de commande met l'axe hors tension et " +
-                "ignore sa consigne, le blocage au frein gèle l'angle. Ce n'est pas un moteur physique : " +
-                "dynamique, frottements de réducteur et élasticité ne sont pas calculés.",
-                "関節故障：リンクは粘性摩擦付き振り子モデルで垂下（重力トルクは負荷モデルから取得）。" +
+                "Отказ сустава: звено провисает по модели маятника с вязким трением и плавно " +
+                "затухает у упора (момент веса считает штатная модель нагрузки; поза остальных " +
+                "суставов считается зафиксированной, их вклад в момент пересчитывается), потеря " +
+                "управления обесточивает ось и игнорирует её цель, отключение с фиксацией " +
+                "замораживает угол. Это УПРОЩЁННАЯ МОДЕЛЬ, а не физический движок: динамика " +
+                "Ньютона–Эйлера, трение в редукторах, люфты и упругость не считаются.",
+                "Joint failure: the link sags as a pendulum with viscous friction and settles " +
+                "smoothly at the stop (the gravity torque comes from the platform load model; the " +
+                "other joints are held fixed, their torque contribution is recomputed), loss of " +
+                "control de-energizes the axis and ignores its target, a brake-locked shutdown " +
+                "freezes the angle. This is a SIMPLIFIED MODEL, not a physics engine: rigid-body " +
+                "dynamics, gearbox friction, backlash and elasticity are not simulated.",
+                "关节故障：连杆按带黏性摩擦的摆模型下垂并在限位处平滑收敛（重力力矩由平台负载" +
+                "模型给出；其余关节视为固定，其力矩贡献逐步重算），失去控制会断电该轴并忽略其目标，" +
+                "抱闸停机则冻结角度。这是简化模型而非物理引擎：不计刚体动力学、减速器摩擦、间隙与弹性。",
+                "Fallo de eje: el eslabón cae como un péndulo con fricción viscosa y se asienta " +
+                "suavemente en el tope (el par de gravedad lo da el modelo de carga; los demás ejes " +
+                "se consideran fijos y su aporte se recalcula), la pérdida de control desenergiza el " +
+                "eje y su consigna se ignora, el bloqueo con freno congela el ángulo. Es un MODELO " +
+                "SIMPLIFICADO, no un motor físico.",
+                "Gelenkausfall: das Glied sinkt als Pendel mit viskoser Reibung und läuft weich in " +
+                "den Anschlag (das Gewichtsmoment liefert das Lastmodell; die übrigen Achsen gelten " +
+                "als fest, ihr Momentanteil wird neu berechnet), Steuerungsverlust schaltet die " +
+                "Achse ab und ignoriert ihr Ziel, Bremsenstillstand friert den Winkel ein. " +
+                "VEREINFACHTES MODELL, keine Physik-Engine.",
+                "Panne d'axe : le segment descend comme un pendule à frottement visqueux et se pose " +
+                "en douceur sur la butée (le couple de gravité vient du modèle de charge ; les " +
+                "autres axes sont considérés fixes et leur contribution est recalculée), la perte " +
+                "de commande met l'axe hors tension, le blocage au frein gèle l'angle. MODÈLE " +
+                "SIMPLIFIÉ, pas un moteur physique.",
+                "関節故障：リンクは粘性摩擦付き振り子モデルで垂下し、限位で滑らかに収束します" +
+                "（重力トルクは負荷モデルから取得。他軸は固定とみなし、その寄与を再計算）。" +
                 "制御喪失は軸を無通電にして目標を無視、ブレーキ停止は角度を凍結します。" +
-                "物理エンジンではなく、剛体動力学・減速機摩擦・弾性は計算しません。"),
+                "物理エンジンではなく簡易モデルです。"),
             Row("valid.title", "Валидация перед запуском", "Pre-run validation", "启动前校验",
                 "Validación previa", "Prüfung vor dem Start", "Validation avant départ", "起動前検証"),
             Row("valid.run", "Проверить траекторию", "Validate trajectory", "校验轨迹",

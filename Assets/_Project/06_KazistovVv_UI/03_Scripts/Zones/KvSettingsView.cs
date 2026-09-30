@@ -278,14 +278,40 @@ namespace KazistovVvUI
 
     /// <summary>
     /// Содержимое панели «Настройки» (dock-панель): вкладки «Функции»,
-    /// «Управление», «Интерфейс», «О программе». Состав вкладок — из
+    /// «Управление», «Интерфейс», «Графика», «О программе», «Справка». Состав вкладок — из
     /// <see cref="KvSettingsSchema"/>, поэтому список расширяется данными
     /// (StreamingAssets), а не правкой этого файла.
+    ///
+    /// ВКЛАДКА «ГРАФИКА» (сессия 18.09.2026) добавлена ЧЕТВЁРТОЙ — рядом с «Интерфейс»,
+    /// как требует ТЗ. Её содержимое строит отдельный модуль
+    /// `KazistovVvFeatures.KvGraphicsUi` — панель остаётся такой же, как была.
     /// </summary>
     public class KvSettingsView : MonoBehaviour
     {
         private static readonly string[] Tabs =
-            { "Функции", "Управление", "Интерфейс", "О программе", "Справка" };
+            { "Функции", "Управление", "Интерфейс", "Графика", "О программе", "Справка" };
+
+        /// <summary>Сколько вкладок в панели настроек.</summary>
+        public const int TabCount = 6;
+
+        /// <summary>Номер вкладки «Графика» (ТЗ: рядом с «Интерфейс»).</summary>
+        public const int GraphicsTabIndex = 3;
+
+        /// <summary>Номер вкладки «Справка».</summary>
+        public const int HelpTabIndex = 5;
+
+        /// <summary>
+        /// Номер вкладки по её русскому имени (внутреннему ключу). Нужен там, где номер
+        /// вкладки задавать числом опасно (диагностика, команды меню) — при добавлении
+        /// новых вкладок такие вызовы не ломаются.
+        /// </summary>
+        public static int IndexOfTab(string ruKey)
+        {
+            if (string.IsNullOrEmpty(ruKey)) return -1;
+            for (int i = 0; i < Tabs.Length; i++)
+                if (string.Equals(Tabs[i], ruKey, StringComparison.OrdinalIgnoreCase)) return i;
+            return -1;
+        }
 
         private RectTransform root;
         private RectTransform content;
@@ -314,13 +340,18 @@ namespace KazistovVvUI
                 bg.color = KvTheme.PanelDark;
             }
 
-            RectTransform strip = KvWidgets.CreateRow(root, "Tabs", 21f, 2f);
+            // ФИКС 6 (§23): полоса вкладок приведена к эталону KvWidgets.TabHeight (26 px —
+            // внутри требуемого диапазона 24…28), шрифт — мелкий (FontSizeSmall, задаётся
+            // внутри KvTheme.CreateButton при small = true). До этого высота была 19…21 px,
+            // но кнопки вкладок всё равно могли «разъехаться»: размер теперь задаётся явно
+            // и в LayoutElement, и в sizeDelta (см. KvWidgets.Segmented).
+            RectTransform strip = KvWidgets.CreateRow(root, "Tabs", KvWidgets.TabHeight, 2f);
             strip.anchorMin = new Vector2(0f, 1f);
             strip.anchorMax = new Vector2(1f, 1f);
             strip.pivot = new Vector2(0.5f, 1f);
-            strip.sizeDelta = new Vector2(-6f, 20f);
+            strip.sizeDelta = new Vector2(-6f, KvWidgets.TabHeight - 1f);
             strip.anchoredPosition = new Vector2(0f, -2f);
-            tabStrip = KvWidgets.Segmented(strip, "Tabs", TabLabels(), 0, SetTab, 19f);
+            tabStrip = KvWidgets.Segmented(strip, "Tabs", TabLabels(), 0, SetTab, KvWidgets.TabHeight - 2f);
 
             GameObject scrollGo = new GameObject("Scroll", typeof(ScrollRect), typeof(RectMask2D),
                 typeof(Image));
@@ -332,7 +363,7 @@ namespace KazistovVvUI
             viewport.anchorMin = Vector2.zero;
             viewport.anchorMax = Vector2.one;
             viewport.offsetMin = new Vector2(2f, 2f);
-            viewport.offsetMax = new Vector2(-2f, -24f);
+            viewport.offsetMax = new Vector2(-2f, -(KvWidgets.TabHeight + 2f));
 
             scroll = scrollGo.GetComponent<ScrollRect>();
             scroll.horizontal = false;
@@ -382,7 +413,8 @@ namespace KazistovVvUI
                 case 0: BuildFeatures(); break;
                 case 1: BuildBindings(); break;
                 case 2: BuildInterface(); break;
-                case 3: BuildAbout(); break;
+                case 3: BuildGraphics(); break;
+                case 4: BuildAbout(); break;
                 default: BuildHelp(); break;
             }
             LayoutRebuilder.ForceRebuildLayoutImmediate(content);
@@ -784,9 +816,34 @@ namespace KazistovVvUI
                 KvLoc.T("settings.tab.functions", Tabs[0]),
                 KvLoc.T("settings.tab.controls", Tabs[1]),
                 KvLoc.T("settings.tab.interface", Tabs[2]),
-                KvLoc.T("settings.tab.about", Tabs[3]),
-                KvLoc.T("settings.tab.help", Tabs[4])
+                KvLoc.T("graphics.tab.title", Tabs[3]),
+                KvLoc.T("settings.tab.about", Tabs[4]),
+                KvLoc.T("settings.tab.help", Tabs[5])
             };
+        }
+
+        // ------------------------------------------------------------------ вкладка 4 «Графика»
+
+        /// <summary>
+        /// ЭТАП 3 ТЗ: раздел «Графика». Содержимое строит отдельный модуль
+        /// `KazistovVvFeatures.KvGraphicsUi`: он складывает созданные строки в тот же
+        /// список `rows`, поэтому штатная очистка вкладки работает без изменений.
+        /// Вкладка построена так, что при недоступной службе (например, до её запуска)
+        /// показывает честное сообщение вместо пустоты.
+        /// </summary>
+        private void BuildGraphics()
+        {
+            try
+            {
+                KazistovVvFeatures.KvGraphicsUi.BuildPanel(content, rows, Rebuild);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[KazistovVv] вкладка «Графика» не собрана: " + e.Message);
+                Text error = KvWidgets.Note(content,
+                    "Раздел «Графика» недоступен: " + e.Message, KvTheme.Warn);
+                rows.Add(error.gameObject);
+            }
         }
 
         private void AddPanelSwitch(string id, string title)
@@ -850,6 +907,18 @@ namespace KazistovVvUI
             Header("Модули интерфейса");
             AddInfo("Команд в реестре", KvCommands.All.Count.ToString());
             AddInfo("Внешние настройки", KvSettingsSchema.ExternalStatus);
+            // Сессия 18.09.2026: раздел «Графика» — подбор под железо и пресеты качества.
+            if (KazistovVvFeatures.KvGraphicsService.Current != null)
+            {
+                KazistovVvFeatures.KvGraphicsService g = KazistovVvFeatures.KvGraphicsService.Current;
+                AddInfo("Графика", KazistovVvFeatures.KvGraphicsModel.Label(g.EffectivePreset()) +
+                    " · " + (g.Available ? "доступна" : "недоступна"));
+                AddInfo("Пресеты графики", g.PresetFileStatus);
+            }
+            else
+            {
+                AddInfo("Графика", "служба ещё не запущена");
+            }
             Text tail = KvWidgets.Note(content,
                 "Состав кнопок/меню задаётся реестром команд: новая команда — новая кнопка " +
                 "или пункт меню без правок панелей.", KvTheme.TextDisabled);
@@ -946,7 +1015,10 @@ namespace KazistovVvUI
         /// <summary>Обновить отрисовку при внешнем изменении (например, темы).</summary>
         public void RefreshValues()
         {
-            if (ActiveTab == 2 || ActiveTab == 3) Rebuild();
+            // Вкладки 0 и 1 — списки (функции, бинды) — пересобираются по своим событиям;
+            // остальные («Интерфейс», «Графика», «О программе», «Справка») показывают
+            // текущие значения, поэтому пересобираются здесь.
+            if (ActiveTab >= 2) Rebuild();
         }
 
         /// <summary>Перекрасить панель под текущую тему.</summary>

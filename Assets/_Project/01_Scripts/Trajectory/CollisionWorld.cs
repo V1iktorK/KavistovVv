@@ -356,8 +356,24 @@ namespace TrajectoryCore
             return best;
         }
 
-        /// <summary>Минимальный зазор между капсульной цепочкой робота и миром.</summary>
-        public float MinDistanceChain(IList<Vector3> nodes, float linkRadius)
+        /// <summary>
+        /// Минимальный зазор между капсульной цепочкой робота и миром.
+        ///
+        /// ФИКС §27 — С КАКОГО ОТРЕЗКА НАЧИНАТЬ. Прежнее правило «первое звено (база) крепится
+        /// к опоре, его столкновения считаются нормой» было ЖЁСТКО зашито как
+        /// `nodes.Count > 2 ? 1 : 0` и применялось к ЛЮБОМУ роботу. У 6-осевого это верно:
+        /// нулевой отрезок — колонна базы (Axis1→Axis2), стоящая на столе-опоре. Но у SCARA
+        /// нулевой отрезок — это РЕАЛЬНОЕ ПЛЕШО (J1→J2, ≈0.33 м), и он не проверялся против
+        /// препятствий ВООБЩЕ: ни в `PoseValidator.ClearanceAt`, ни в `ReachabilityOracle`.
+        /// Отсюда «не на всех роботах работает грамотно коллизия» — плечо SCARA проходило
+        /// сквозь столбы, стойки и второй стенд, а система видела «запас достаточный».
+        ///
+        /// Теперь отрезок задаёт ВЫЗЫВАЮЩИЙ (он знает тип робота):
+        ///   * <paramref name="firstSegment"/> = −1 (по умолчанию) — прежнее поведение
+        ///     (пропускать первый отрезок у цепочки длиннее двух узлов);
+        ///   * 0 — проверять ВСЕ отрезки (так вызывается SCARA: оба её звена рабочие).
+        /// </summary>
+        public float MinDistanceChain(IList<Vector3> nodes, float linkRadius, int firstSegment = -1)
         {
             float best = float.MaxValue;
 
@@ -366,8 +382,10 @@ namespace TrajectoryCore
                 for (int i = 0; i + 1 < nodes.Count; i++)
                     best = Mathf.Min(best, Mathf.Min(nodes[i].y, nodes[i + 1].y) - FloorY - linkRadius);
 
-            // первое звено (база) крепится к опоре — его столкновения считаются нормой
-            int firstSegment = nodes.Count > 2 ? 1 : 0;
+            // первое звено (база) крепится к опоре — его столкновения считаются нормой.
+            // −1 = «решить здесь по прежнему правилу»; 0 = проверять всё (см. описание выше).
+            if (firstSegment < 0) firstSegment = nodes.Count > 2 ? 1 : 0;
+            firstSegment = Mathf.Clamp(firstSegment, 0, Mathf.Max(0, nodes.Count - 2));
 
             for (int i = firstSegment; i + 1 < nodes.Count; i++)
             {

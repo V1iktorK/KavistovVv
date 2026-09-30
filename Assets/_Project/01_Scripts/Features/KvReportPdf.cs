@@ -273,21 +273,19 @@ namespace KazistovVvFeatures
                    (imagesIncluded ? " · со снимками" : " · без снимков (нет графики)");
         }
 
-        /// <summary>Папка отчётов (ТЗ): «Документы\KazistovVv\reports».</summary>
+        /// <summary>
+        /// Папка отчётов — ЕДИНЫЙ каталог отчётов проекта (ФИКС 11):
+        /// `&lt;persistentDataPath&gt;/KazistovVv/Reports`, тот же, что у всех остальных отчётов
+        /// и диагностик (`FeatureStorage.ReportPath`).
+        ///
+        /// ЧТО БЫЛО И ПОЧЕМУ ИЗМЕНЕНО. Раньше это была «Документы\KazistovVv\reports» (папка ТЗ
+        /// на момент этапа 5). Но «Документы» на этой машине лежат в OneDrive, а во время PlayMode
+        /// OneDrive-файлы не дописываются (§13.11) — PDF оставался пустым до остановки PlayMode.
+        /// ФИКС 10 перенёс в `persistentDataPath` все отчёты, кроме этого; теперь путь один.
+        /// </summary>
         public string FolderPath
         {
-            get
-            {
-                try
-                {
-                    string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                    if (!string.IsNullOrEmpty(docs))
-                        return FeatureStorage.EnsureDir(Path.Combine(
-                            Path.Combine(docs, "KazistovVv"), "reports"));
-                }
-                catch (Exception) { }
-                return FeatureStorage.EnsureDir(Path.Combine(FeatureStorage.Root, "Reports"));
-            }
+            get { return FeatureStorage.ReportsDir; }
         }
 
         public void Bind(TrajectoryFlowController controller, FeatureHub hub, KvStageHub3 hub3)

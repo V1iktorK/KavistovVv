@@ -20,8 +20,12 @@ namespace KazistovVvUI
     /// Курсоры изменения размера окна (ЭТАП 4): «↔», «↕» и две диагонали. Текстуры
     /// рисуются КОДОМ (как иконки), файлов-ассетов нет; курсом управляет
     /// <see cref="Set"/> при наведении на границу и <see cref="Reset"/> при уходе.
-    /// Если курсор захвачен (телеоперация, `Cursor.lockState == Locked`) — не трогаем:
-    /// в FPS-режиме системный курсор скрыт, и подмена была бы бессмысленной.
+    ///
+    /// §26: запись формы курсора идёт через <see cref="KvMouseCursor"/> — он ЕДИНСТВЕННЫЙ,
+    /// кто пишет в `Cursor.*` (включая `Cursor.SetCursor`). Своя иконка
+    /// (<see cref="KvVirtualCursor"/>) для основного режима не используется: если она
+    /// включена флагом <see cref="KvMouseCursor.InGameIconInCameraMode"/>, форма меняется
+    /// и у неё — поэтому вызов `SetShape` сохранён.
     /// </summary>
     public static class KvCursors
     {
@@ -40,18 +44,31 @@ namespace KazistovVvUI
                 Reset();
                 return;
             }
-            if (Cursor.lockState == CursorLockMode.Locked) return;
+            if (KvMouseCursor.Captured) return;
 
             Texture2D tex = TextureFor(edge);
             if (tex == null) return;
-            Cursor.SetCursor(tex, new Vector2(Size * 0.5f, Size * 0.5f), CursorMode.ForceSoftware);
+            // §26: форма подменяется у ОБЕИХ иконок (какая сейчас видна, та и покажет «↔»),
+            // но записи в Cursor.* делает только KvMouseCursor.
+            KvVirtualCursor.SetShape(tex);
+            KvMouseCursor.SetSystemCursorShape(tex, new Vector2(Size * 0.5f, Size * 0.5f));
         }
 
         /// <summary>Вернуть обычный курсор.</summary>
         public static void Reset()
         {
-            if (Cursor.lockState == CursorLockMode.Locked) return;
-            Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
+            if (KvMouseCursor.Captured) return;
+            KvVirtualCursor.SetShape(null);
+            KvMouseCursor.ResetSystemCursorShape();
+        }
+
+        /// <summary>
+        /// Вернуть обычную ФОРМУ, не трогая системный курсор: вызывается при захвате курсора
+        /// (телеоперация), чтобы не осталось «залипшей» стрелки изменения размера.
+        /// </summary>
+        public static void ResetShapeOnly()
+        {
+            KvVirtualCursor.SetShape(null);
         }
 
         private static Texture2D TextureFor(KvResizeEdge edge)

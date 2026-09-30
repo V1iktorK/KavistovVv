@@ -131,5 +131,11 @@ _stage5_tests.xml
 # Резервные копии сцен и файлов
 *.unity.bak
 
+# Предправковые копии, которые кладёт агент рядом с ассетом (например
+# `MainScene.unity.dsh_backup_s22_lockcursor` + сгенерированный Unity `.meta`).
+# Раньше не были покрыты ни одним правилом и попадали в untracked как ассеты.
+*.dsh_backup_*
+*.dsh_backup_*.meta
+
 # Локальные предправковые копии манифеста пакетов (см. PROJECT_CONTEXT.md §0.10, §0.11)
 Packages/*.bak_*

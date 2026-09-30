@@ -17,11 +17,18 @@ using UnityEngine.Rendering;                  // LightUnit (единицы св�
 ///        Правая (зелёная) — наведение ориентации TCP (куда «смотрит» инструмент).
 ///  3) Маленький коллайдер (CharacterController) на камере: камера врезается
 ///     в стены/текстуры, но не проходит сквозь них.
-///  4) TAB — переключение ВИДИМОГО КУРСОРА (режим работы с UI): курсор виден и
-///     свободен (можно нажимать кнопки панелей). Клик по UI курсор НЕ прячет;
-///     клик по рабочему пространству (миру) — возврат к захваченному курсору
-///     (положение «до нажатия»). Раньше это был CAPS LOCK — бинд перенесён на TAB
-///     (CAPS LOCK больше ничего не вызывает).
+///  4) РЕЖИМ КУРСОРА — ОДНА КЛАВИША **TAB** (§26): переключает два режима.
+///        • РЕЖИМ КАМЕРЫ — курсор скрыт и захвачен (`Cursor.lockState = Locked`), мышь вращает
+///          камеру, WASD/QE двигают камеру, панели скрыты, интерфейс недоступен;
+///        • РЕЖИМ ИНТЕРФЕЙСА — виден СИСТЕМНЫЙ курсор Unity (`Cursor.visible = true`,
+///          `lockState = None`), камера на мышь НЕ реагирует и клавишами (WASD/QE) НЕ двигается,
+///          мышь работает только с UI (панели кликабельны: меню, дерево, свойства, настройки).
+///     CAPS LOCK НЕ ДЕЛАЕТ НИЧЕГО: прежнее удержание (§23.3) убрано полностью.
+///     ESC — ВАРИАНТ А (§26, ЗАДАЧА 3): «Esc = Tab с приоритетом контекста». Из режима камеры
+///     Esc показывает системный курсор Unity и панели (как Tab). В режиме интерфейса Esc сначала
+///     отдаётся контексту (меню, палитра, контекстное меню, размещение робота, незавершённый
+///     сценарий, фокус навигации), и только если контекста нет — возвращает режим камеры.
+///     Всё состояние курсора ведёт KvMouseCursor — единый источник правды (§22.8, §23 ФИКС 1, §26).
 ///  5) G — ФОНАРИК (spot-свет на камере), включение/выключение. Все параметры света
 ///     (углы конуса, поток в люменах, дальность, радиус, температура) — в инспекторе.
 ///  6) Управление геймпадом (стики) активно, когда геймпад подключён и курсор
@@ -41,7 +48,13 @@ public class FreeFlyCameraController : MonoBehaviour
     public bool invertY = false;
 
     [Header("Startup")]
-    public bool lockCursorOnStart = false;
+    // ФИКС 3 (§22): значение по умолчанию — TRUE («захватывать курсор при запуске»).
+    // Раньше здесь стояло false, и в самой сцене MainScene.unity было `lockCursorOnStart: 0` —
+    // поэтому при входе в PlayMode курсор не захватывался, и мышь начинала работать только
+    // после лишнего клика/ПКМ. Исключение одно: если при запуске показывается стартовое меню,
+    // курсор остаётся свободным (иначе пункты меню не нажать) и захватывается сам, как только
+    // меню закрыто — см. KvStartMenu.WillShowOnLaunch.
+    public bool lockCursorOnStart = true;
     public Vector3 startupPosition = new Vector3(0f, 2f, -28f);
     public Vector3 startupLookAt = new Vector3(12f, -8f, 0f);
 
@@ -717,15 +730,22 @@ public class FreeFlyCameraController : MonoBehaviour
         // создаём (канвас/панели строятся автоматически, дубликаты гасятся).
         EnsureKazistovVvUi();
 
-        if (lockCursorOnStart && Application.isFocused)
+        // ФИКС 3 (§22): ЗАХВАТ КУРСОРА НА СТАРТЕ — БЕЗ ТРЕБОВАНИЯ КЛИКА, но с одной оговоркой:
+        // если при запуске будет показано стартовое меню, курсор обязан остаться СВОБОДНЫМ,
+        // иначе пункты меню невозможно нажать (раньше именно так и было: меню открывалось,
+        // а мышь оставалась захваченной — приходилось вслепую жать ПКМ и Enter).
+        // Как только меню закрывается, KvStartMenu сам отдаёт захват — мышь снова
+        // управляет камерой БЕЗ дополнительного клика.
+        if (lockCursorOnStart && Application.isFocused && !KazistovVvFeatures.KvStartMenu.WillShowOnLaunch)
         {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
+            KazistovVvUI.KvMouseCursor.Capture("старт: телеоперация");
         }
         else
         {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
+            KazistovVvUI.KvMouseCursor.Release(
+                KazistovVvFeatures.KvStartMenu.WillShowOnLaunch
+                    ? "старт: ожидается стартовое меню (курсор свободен)"
+                    : "старт: окно без фокуса (курсор свободен)", false);
         }
     }
 
@@ -740,16 +760,49 @@ public class FreeFlyCameraController : MonoBehaviour
 
     private void OnApplicationFocus(bool hasFocus)
     {
-        if (hasFocus && lockCursorOnStart)
+        // ФИКС 7 (§22): потеря фокуса курсор освобождает, возврат фокуса — ВОССТАНАВЛИВАЕТ
+        // ровно тот режим, который выбрал оператор (а не захватывает принудительно, как раньше:
+        // из-за этого курсор «сам возвращался» в телеоперацию в самый неподходящий момент).
+        // ФИКС 4 (§23): состояние курсора целиком ведёт KvMouseCursor — он же показывает
+        // СИСТЕМНЫЙ курсор Unity, пока окно не в фокусе.
+        KazistovVvUI.KvMouseCursor.Apply();
+    }
+
+    /// <summary>
+    /// ВНЕШНЕЕ УПРАВЛЕНИЕ КАМЕРОЙ (ФИКС 5, §23). Пока флаг поднят, контроллер НЕ трогает
+    /// ни поворот, ни позицию камеры: камерой управляет кинематографический облёт
+    /// (<see cref="KazistovVvFeatures.KvStartMenu"/>) или облёт простоя
+    /// (<see cref="KazistovVvUI.IdleCameraBrain"/>).
+    ///
+    /// ЗАЧЕМ: раньше облёт и контроллер писали в один и тот же `transform` в одном кадре.
+    /// Облёт ставил поворот в LateUpdate, а `Update` контроллера в следующем кадре возвращал
+    /// СВОЙ (замороженный) `yaw/pitch` — камера «дёргалась» и «колбасила». Теперь облёт
+    /// работает один, а при снятии флага углы синхронизируются с фактическим поворотом
+    /// (чтобы не было рывка при возврате управления).
+    /// </summary>
+    public bool ExternalCameraControl
+    {
+        get { return externalCameraControl; }
+        set
         {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
+            if (externalCameraControl == value) return;
+            externalCameraControl = value;
+            // Возврат управления: принимаем фактический поворот камеры за свой,
+            // иначе первый же сдвиг мыши «дёрнул» бы камеру в старую ориентацию.
+            if (!value) SyncAnglesFromTransform();
         }
-        else if (!hasFocus)
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-        }
+    }
+
+    private bool externalCameraControl;
+    private KazistovVvUI.KvCursorMode lastCursorMode = KazistovVvUI.KvCursorMode.Free;
+
+    /// <summary>Синхронизировать внутренние yaw/pitch с фактическим поворотом камеры.</summary>
+    public void SyncAnglesFromTransform()
+    {
+        Vector3 euler = transform.eulerAngles;
+        yaw = euler.y;
+        float x = euler.x > 180f ? euler.x - 360f : euler.x;
+        pitch = Mathf.Clamp(x, -89f, 89f);
     }
 
     /// <summary>
@@ -797,18 +850,16 @@ public class FreeFlyCameraController : MonoBehaviour
     {
         bool gamepadMode = IsGamepadActive();
 
-        // TAB — переключение РЕЖИМА UI: курсор виден + панели KazistovVv показаны
-        // (телеоперация: курсор захвачен + панели скрыты).
-        // Клик по UI курсор не прячет; клик по миру — возврат к телеоперации.
-        // (Раньше здесь был CAPS LOCK — по ТЗ бинд перенесён на TAB; CAPS LOCK
-        //  теперь не читается в проекте вообще.)
-        // ЭТАП 11: если включена навигация по интерфейсу с клавиатуры, Tab ЗАНЯТ фокусом
-        // (ТЗ: «Tab, стрелки, Enter»), поэтому режим UI переключают Esc (показать) и
-        // команда «Показать / скрыть интерфейс» (тулбар/меню). Настройка выключена —
-        // поведение ровно прежнее.
-        if (IsKeyPressed(KeyCode.Tab) && !KazistovVvUI.KvKeyboardNav.TabHandledByNavigation)
+        // §26: РЕЖИМ КУРСОРА переключает TAB — им занимается `KvMouseCursor.Tick()` (он вызывается
+        // каждый кадр из `KvVirtualCursor`), и там же живёт самовосстановление `Cursor.*`
+        // (ФИКС 1 §23: «мышь не восстанавливается» больше не случается — режим возвращается сам,
+        // без F1 и без выхода в стартовое меню). Контроллер камеры курсор НЕ переключает:
+        // он только читает режим (`KvMouseCursor.Captured`) и пишет смену в консоль одной строкой.
+        // CAPS LOCK не читается ни здесь, ни в KvMouseCursor: клавиша не делает ничего.
+        if (lastCursorMode != KazistovVvUI.KvMouseCursor.Mode)
         {
-            ToggleUiMode();
+            lastCursorMode = KazistovVvUI.KvMouseCursor.Mode;
+            Debug.Log("[FreeFlyCamera] " + KazistovVvUI.KvMouseCursor.Describe());
         }
 
         // G — фонарик (toggle). Бинт НЕ менялся: та же клавиша G.
@@ -853,67 +904,122 @@ public class FreeFlyCameraController : MonoBehaviour
         bool rmbDown = IsMouseButtonDownThisFrame(1);
         bool overUI = IsPointerOverUI();
 
-        // Esc освобождает курсор и показывает панели (как TAB в сторону UI).
+        // Esc — ВАРИАНТ А (§26, ЗАДАЧА 3): «Esc = Tab с приоритетом контекста».
+        //   • РЕЖИМ КАМЕРЫ  → Esc делает то же, что Tab: показывает СИСТЕМНЫЙ курсор Unity и панели
+        //     (ФИКС 4 §23). Отдельным механизмом показа курсора Esc больше НЕ является.
+        //   • РЕЖИМ ИНТЕРФЕЙСА → если открыт контекст, который обрабатывает Esc сам (меню, палитра,
+        //     контекстное меню, группы тулбара, размещение робота, незавершённый сценарий,
+        //     фокус навигации), Esc принадлежит ЕМУ — режим НЕ переключается. Если контекста нет —
+        //     Esc возвращает РЕЖИМ КАМЕРЫ: курсор снова скрыт и захвачен, панели скрываются,
+        //     мышь вращает камеру.
+        //   Контекст читается по снимку НАЧАЛА кадра (KazistovVvUIManager.EscContextWasOpen),
+        //   поэтому одно нажатие Esc не может сделать два дела сразу (закрыть меню И сменить режим).
+        //   Геймпад B (Cancel) остаётся «отменой»: он показывает курсор из режима камеры, но режим
+        //   НЕ возвращает — иначе «отмена» в панелях выкидывала бы оператора из интерфейса.
         // КРОМЕ РЕЖИМА ПЕРЕМЕЩЕНИЯ ТОЧКИ: там Esc принадлежит режиму (отмена перемещения, ТЗ шаг 4)
-        // и курсор с панелями не трогает — для UI в этом режиме остаётся TAB.
+        // и курсор с панелями не трогает (поведение §19/§23 сохранено без изменений).
+        // ФИКС 1 (§23): даже если состояние курсора собьёт кто-то ещё (движок редактора,
+        // потеря фокуса окна), `KvMouseCursor.Tick()` восстановит его в следующем кадре.
         bool pointMoveNow = flowController != null && flowController.IsPointMoveMode;
-        bool escDown = IsKeyPressed(KeyCode.Escape) || KazistovVvUI.KvGamepadBridge.Cancel;
-        if (escDown && !pointMoveNow && Cursor.lockState == CursorLockMode.Locked)
+        bool escKeyDown = IsKeyPressed(KeyCode.Escape);
+        bool escPadDown = KazistovVvUI.KvGamepadBridge.Cancel;
+        if (escKeyDown && !pointMoveNow)
         {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-            KazistovVvUI.KazistovVvUIManager.SetUiVisible(true);
+            if (KazistovVvUI.KvMouseCursor.Captured)
+            {
+                KazistovVvUI.KvMouseCursor.Release(
+                    "Esc: режим интерфейса, системный курсор и панели показаны");
+            }
+            else if (!KazistovVvUI.KazistovVvUIManager.EscContextWasOpen)
+            {
+                KazistovVvUI.KvMouseCursor.Capture(
+                    "Esc: контекста нет — возврат в режим камеры (как повторный Tab)");
+            }
+        }
+        else if (escPadDown && !pointMoveNow && KazistovVvUI.KvMouseCursor.Captured)
+        {
+            KazistovVvUI.KvMouseCursor.Release(
+                "геймпад B: режим интерфейса, системный курсор и панели показаны");
         }
 
         // Клик по окну Game при свободном курсоре → захват мыши (FPS-режим).
         // Если клик пришёлся на UI-канвас — не захватываем (работают кнопки).
+        // ФИКС 3 (§22): проверка `Application.isFocused` убрана — первый же клик по Game-вью
+        // и даёт фокус, и захватывает курсор; раньше этот клик «съедался» проверкой фокуса,
+        // поэтому мышь подхватывалась только со второго нажатия (оператор делал это ПКМ).
+        // ФИКС 7 (§23): в кадре, когда стартовое меню открылось или закрылось, клик по миру
+        // НЕ обрабатывается: иначе клик по пункту меню («Настройки» и т. п.) успевал
+        // «провалиться» в сцену — меню уже скрыто, панели ещё не отрисованы, и клик
+        // срабатывал как действие в мире. Это же убирает захват курсора «поверх» меню.
         bool justCaptured = false;
-        if (Cursor.lockState != CursorLockMode.Locked && (lmbDown || rmbDown) && !overUI && Application.isFocused)
+        if (!KazistovVvUI.KvMouseCursor.Captured && !externalCameraControl &&
+            !KazistovVvFeatures.KvStartMenu.ChangedThisFrame &&
+            (lmbDown || rmbDown) && !overUI)
         {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-            // UI НЕ скрываем: панели пропадают только по TAB.
+            KazistovVvUI.KvMouseCursor.Capture("клик по миру: режим камеры");
+            // UI НЕ скрываем вручную: панели гасит сам режим камеры (KvMouseCursor.Capture).
             justCaptured = true;
             primaryButtonWasPressed = true; // этот клик не считаем телеоперацией
         }
 
         // В захваченном состоянии мышь вращает камеру (без удержания ПКМ).
-        bool lookFromMouse = Cursor.lockState == CursorLockMode.Locked && !justCaptured;
+        // ФИКС 5 (§23): при внешнем управлении (облёт меню/простоя) поворот НЕ применяется,
+        // и поворот пишется ТОЛЬКО когда мышь реально сдвинулась — иначе контроллер
+        // перезаписывал кадр облёта своим устаревшим yaw/pitch и камера «колбасила».
+        // §26: в кадре САМОГО переключения (Tab/Esc/клик) поворот тоже пропускается —
+        // мышь в этом кадре ещё свободна, и её дельта иначе разом дёрнула бы камеру.
+        bool lookFromMouse = KazistovVvUI.KvMouseCursor.Captured && !justCaptured &&
+                             !externalCameraControl && !KazistovVvUI.KvMouseCursor.SwitchedThisFrame;
         if (lookFromMouse)
         {
             Vector2 delta = ReadMouseDelta();
-            float mouseX = delta.x;
-            float mouseY = delta.y * (invertY ? 1f : -1f);
+            if (delta.sqrMagnitude > 0.0000001f)
+            {
+                float mouseX = delta.x;
+                float mouseY = delta.y * (invertY ? 1f : -1f);
 
-            yaw += mouseX;
-            pitch -= mouseY;
-            pitch = Mathf.Clamp(pitch, -89f, 89f);
+                yaw += mouseX;
+                pitch -= mouseY;
+                pitch = Mathf.Clamp(pitch, -89f, 89f);
 
-            transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+                transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+            }
         }
 
         // Поворот геймпадом (правый стик): только в телеоперации (курсор захвачен).
         // ЭТАП 9: стики работают и БЕЗ ручного тумблера R3 (левая ось — ходьба, правая — обзор),
         // тумблер оставлен для совместимости.
         bool stickControl = gamepadMove || KazistovVvUI.KvGamepadBridge.SticksAlwaysActive;
-        bool teleopMode = Cursor.lockState == CursorLockMode.Locked;
-        if (teleopMode && stickControl && gamepadMode && Gamepad.current != null)
+        bool teleopMode = KazistovVvUI.KvMouseCursor.Captured;
+        if (teleopMode && !externalCameraControl && stickControl && gamepadMode && Gamepad.current != null)
         {
             Vector2 rot = Gamepad.current.rightStick.ReadValue();
-            float lookX = rot.x * gamepadLookSensitivity * 100f * Time.deltaTime;
-            float lookY = rot.y * gamepadLookSensitivity * 100f * Time.deltaTime * (invertY ? 1f : -1f);
-            yaw += lookX;
-            pitch = Mathf.Clamp(pitch - lookY, -89f, 89f);
-            transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+            // ФИКС 5 (§23): поворот пишется ТОЛЬКО при реально отклонённом стике —
+            // «нулевой» стик больше не перезаписывает поворот каждый кадр (из-за этого
+            // геймпад «спорил» с мышью и камера дёргалась).
+            if (rot.sqrMagnitude > 0.0001f)
+            {
+                float lookX = rot.x * gamepadLookSensitivity * 100f * Time.deltaTime;
+                float lookY = rot.y * gamepadLookSensitivity * 100f * Time.deltaTime * (invertY ? 1f : -1f);
+                yaw += lookX;
+                pitch = Mathf.Clamp(pitch - lookY, -89f, 89f);
+                transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+            }
         }
 
         UpdateLaserPointers();
         HandleClickActions();
 
         // --- Движение ---
+        // §26, ЗАДАЧА 2: в РЕЖИМЕ ИНТЕРФЕЙСА камера СТОИТ — её не двигают ни мышь (поворот выше),
+        // ни WASD/QE. Клавиши в этом режиме принадлежат интерфейсу (стрелки/Enter — навигация
+        // по панелям), а полёт остаётся режиму камеры. Раньше WASD двигал камеру и в режиме
+        // интерфейса — по ТЗ §26 это отключено: «камера стоит на месте».
         // В РЕЖИМЕ ПЕРЕМЕЩЕНИЯ ТОЧКИ клавиши QWEASD принадлежат ТОЧКЕ, а не камере:
         // камера стоит на месте, оператор двигает цель (ТЗ, этап 3).
-        bool cameraMoveAllowed = !pointMoveNow;
+        // ФИКС 5 (§23): при внешнем управлении (облёт) камера тоже не двигается.
+        bool cameraMoveAllowed = !pointMoveNow && !externalCameraControl &&
+                                 KazistovVvUI.KvMouseCursor.Captured;
         float speed = IsKeyPressed(KeyCode.LeftShift) ? sprintSpeed * boostMultiplier : moveSpeed;
         Vector3 move = Vector3.zero;
 
@@ -1004,8 +1110,19 @@ public class FreeFlyCameraController : MonoBehaviour
                 KazistovVvUI.KvGamepadBridge.Confirm ||                          // ЭТАП 9: A / RT
                 (!pointMoveMode && IsKeyDownThisFrame(KeyCode.E));   // в режиме E — «точка вверх», а не ЛКМ
             bool cancel = IsKeyPressed(KeyCode.Escape) || KazistovVvUI.KvGamepadBridge.Cancel; // ЭТАП 9: B
-            bool enter = IsKeyPressed(KeyCode.Return) || IsKeyPressed(KeyCode.KeypadEnter) ||
-                         KazistovVvUI.KvGamepadBridge.Enter;                 // ЭТАП 9: LT
+            // ФИКС §27 (комбинации клавиш): ENTER в навигации с клавиатуры нажимает
+            // СФОКУСИРОВАННУЮ кнопку тулбара/меню (`KvKeyboardNav`, строки «Enter — нажать»).
+            // Пока фокус навигации есть, Enter принадлежит ЕЙ и в поток идти не должен: раньше
+            // одно нажатие делало ДВА действия (нажимало кнопку И подтверждало точку /
+            // входило в режим перемещения точки). Пробел из навигации уже убран (§22/§23),
+            // Enter оставался последним дублирующим биндом.
+            bool navOwnsEnter = false;
+            KazistovVvUI.KvKeyboardNav nav = KazistovVvUI.KazistovVvUIManager.KeyboardNavOrNull;
+            if (nav != null && nav.HasFocus) navOwnsEnter = true;
+
+            bool enter = !navOwnsEnter &&
+                         (IsKeyPressed(KeyCode.Return) || IsKeyPressed(KeyCode.KeypadEnter) ||
+                          KazistovVvUI.KvGamepadBridge.Enter);                // ЭТАП 9: LT
             bool shift = IsKeyPressed(KeyCode.LeftShift);
 
             flowController.UpdateAim(aimPoint, aimHitSurface, confirm, cancel,
@@ -1292,7 +1409,7 @@ public class FreeFlyCameraController : MonoBehaviour
     /// </summary>
     private bool AimDepthInputAllowed()
     {
-        if (Cursor.lockState == CursorLockMode.Locked) return true;
+        if (KazistovVvUI.KvMouseCursor.Captured) return true;
         // Панели KazistovVv СКРЫТЫ (телеоперация без захвата курсора): прокручивать нечего —
         // колесо и средняя кнопка принадлежат шарику. Без этой проверки при свободном курсоре
         // колесо работало бы только там, где EventSystem не видит UI, и казалось «мёртвым».
@@ -1300,6 +1417,21 @@ public class FreeFlyCameraController : MonoBehaviour
         if (ui != null && !ui.uiVisible) return true;
         return !IsPointerOverUI();
     }
+
+    // ------------------------------------------------------------------ диагностика колеса
+    // ФИКС 5 (§19): эти три свойства ТОЛЬКО ЧИТАЮТ состояние ввода колеса. Они нужны диагностике,
+    // чтобы честно назвать причину, по которой автопрогон не увидел движения шарика: гейт ввода
+    // (курсор над панелью / режим перемещения точки) или шарик уже упирается в границу хода.
+    // Ни одно из них ничего не меняет — поведение колеса прежнее.
+
+    /// <summary>Можно ли сейчас принимать ввод колеса (курсор захвачен ИЛИ курсор не над панелями).</summary>
+    public bool WheelGateOpen { get { return AimDepthInputAllowed(); } }
+
+    /// <summary>Курсор захвачен (телеоперация): колесо принадлежит шарику безусловно.</summary>
+    public bool WheelCursorLocked { get { return KazistovVvUI.KvMouseCursor.Captured; } }
+
+    /// <summary>Шарик стоит на реальной поверхности, к которой «липнет» (вперёд идти некуда).</summary>
+    public bool WheelStuckToSurface { get { return stickyToSurface && ballSurfaceHit; } }
 
     /// <summary>
     /// Прокрутка колеса в «щелчках» (+ = вперёд, от оператора). За кадр читается ОДИН источник:
@@ -1649,27 +1781,21 @@ public class FreeFlyCameraController : MonoBehaviour
     }
 
     /// <summary>
-    /// TAB: режим UI (курсор виден + панели KazistovVv видны) ⟷ телеоперация
-    /// (курсор захвачен, панели скрыты). UI в Screen Space Overlay — виден
-    /// всегда и не «режется» геометрией сцены.
-    /// Раньше переключалось CAPS LOCK — бинд перенесён на TAB (ТЗ сессии 13.09.2026).
+    /// Переключение режима курсора ВРУЧНУЮ (команда «Показать/скрыть интерфейс», диагностика):
+    /// режим камеры ⟷ режим интерфейса (системный курсор Unity + панели).
+    ///
+    /// §26: ту же самую операцию делает клавиша **TAB** — она читается в `KvMouseCursor.Tick()`
+    /// (фронт нажатия) и вызывает ровно этот же <see cref="KazistovVvUI.KvMouseCursor.Toggle"/>.
+    /// Здесь — только выбор режима; всё состояние курсора ведёт KvMouseCursor (один источник правды).
     /// </summary>
-    private void ToggleUiMode()
+    public void ToggleUiMode()
     {
-        bool uiMode = Cursor.lockState == CursorLockMode.Locked;
-        if (uiMode)
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-            Debug.Log("[FreeFlyCamera] Режим UI: курсор + панели (Tab/клик по миру — обратно).");
-        }
-        else
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-            Debug.Log("[FreeFlyCamera] Телеоперация: курсор захвачен, панели скрыты.");
-        }
-        KazistovVvUI.KazistovVvUIManager.SetUiVisible(uiMode);
+        KazistovVvUI.KvCursorMode now = KazistovVvUI.KvMouseCursor.Toggle("ручное переключение режима");
+        Debug.Log("[FreeFlyCamera] " + (now == KazistovVvUI.KvCursorMode.Captured
+            ? "Режим КАМЕРЫ: курсор скрыт и захвачен, панели скрыты."
+            : "Режим ИНТЕРФЕЙСА: системный курсор Unity, панели показаны.") +
+            " · " + KazistovVvUI.KvMouseCursor.Describe());
+        SyncAnglesFromTransform();
     }
 
     private Transform FindAnyRobotTransformNearAim()

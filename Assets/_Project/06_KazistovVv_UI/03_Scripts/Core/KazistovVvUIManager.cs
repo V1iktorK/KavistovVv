@@ -359,6 +359,21 @@ namespace KazistovVvUI
 
             Log("Интерфейс KazistovVv собран · " + UiVersion + " · тема: " + KvTheme.ModeLabel +
                 " · команд: " + KvCommands.All.Count);
+
+            // ФИКС 6/8 (§23): ЭТАЛОН РАЗМЕРОВ проверяется при КАЖДОМ старте интерфейса.
+            // В §22 метод ValidateSizes() был написан, но не вызывался ниоткуда; теперь
+            // «квадратики», «огромные иконки» и «непонятные +/−» не смогут вернуться незаметно.
+            // В консоль попадает одна строка, и только при провале — отчёт целиком.
+            int sizeFailures = KvWidgets.ValidateSizesFailures();
+            if (sizeFailures > 0)
+                Debug.LogWarning("[UI] эталон размеров KvWidgets: провалов " + sizeFailures + "\n" +
+                                 KvWidgets.ValidateSizes());
+            else
+                Log("эталон размеров KvWidgets: 13 проверок, провалов 0");
+
+            // ФИКС 3/4 (§23): состояние курсора печатается один раз на старте — по этой строке
+            // проверка «мышь восстанавливается» занимает секунды, без выхода в стартовое меню.
+            Log("курсор на старте · " + KvMouseCursor.Describe());
         }
 
         void Update()
@@ -1145,16 +1160,27 @@ namespace KazistovVvUI
                 Execute = delegate { ShowSettings(2); }
             });
 
-            // --- ЭТАП 8: показать/скрыть интерфейс (то же, что TAB)
+            // --- ЭТАП 8: показать/скрыть интерфейс (было «то же, что TAB» — см. ФИКС 8 §22:
+            // теперь это отдельная команда, а режим курсора переключает клавиша TAB —
+            // §26: TAB = режим камеры ⟷ режим интерфейса; CAPS LOCK не делает ничего)
             KvCommands.Register(new KvCommand
             {
                 Id = "ui.toggle",
                 Title = "Показать / скрыть интерфейс",
-                Description = "То же, что TAB: убрать панели и вернуть управление мышью в сцену",
-                Hotkey = "TAB",
+                Description = "Убрать панели и вернуть управление мышью в сцену " +
+                              "(режим курсора переключает TAB: камера ⟷ интерфейс; из режима " +
+                              "камеры то же делает ESC)",
+                Hotkey = "—",
                 Icon = "layers",
                 MenuPath = "Вид/Показать-скрыть интерфейс",
-                Execute = delegate { SetVisibleInternal(!uiVisible); },
+                Execute = delegate
+                {
+                    // ФИКС 7/10 (§22): вместе с панелями переключается и РЕЖИМ КУРСОРА —
+                    // иначе скрытая оболочка оставляла мышь «мёртвой», а показанная не давала
+                    // по себе кликать. Один источник правды — KvMouseCursor.
+                    if (uiVisible) KvMouseCursor.Capture("команда: скрыть интерфейс");
+                    else KvMouseCursor.Release("команда: показать интерфейс (системный курсор)");
+                },
                 IsChecked = delegate { return uiVisible; }
             });
 
@@ -1562,9 +1588,16 @@ namespace KazistovVvUI
         /// <summary>Открыть панель настроек на вкладке (0 функции … 4 справка).</summary>
         public void ShowSettings(int tab)
         {
+            // ФИКС 10 (§22): «настройки не открываются» — потому что команда лишь включала
+            // панель, а САМА ОБОЛОЧКА могла быть скрыта (телеоперация или открытое стартовое
+            // меню). Канвас выключен → панель «включалась» в никуда, и клик по ней был
+            // невозможен. Теперь открытие настроек принудительно показывает оболочку
+            // и освобождает курсор (панель обязана быть кликабельной).
+            if (!uiVisible) SetVisibleInternal(true);
             if (settingsDock != null) settingsDock.SetVisible(true);
             if (settings != null) settings.SetTab(tab);
             LayoutDock(StatusHeight);
+            KvMouseCursor.Release("открытие настроек (вкладка " + tab + ")");
         }
 
         /// <summary>
@@ -2377,9 +2410,11 @@ namespace KazistovVvUI
 
             status.SetTheme(KvTheme.ModeLabel);
             status.SetFps(1f / Mathf.Max(0.0001f, Time.unscaledDeltaTime));
-            status.SetHint(uiVisible
-                ? KvLoc.T("status.hint.teleop", "TAB — телеоперация")
-                : KvLoc.T("status.hint.ui", "TAB — интерфейс"));
+            // §26: справа в статус-баре — ИНДИКАТОР РЕЖИМА КУРСОРА (иконка + «Режим: Камера / UI»).
+            // Раньше здесь была служебная подсказка «TAB — телеоперация/интерфейс»: она дублировала
+            // индикатор по смыслу, поэтому её место занял сам индикатор, а текст про Tab переехал
+            // в его tooltip (клик по индикатору переключает режим — то же, что Tab).
+            status.SetCursorMode(KvMouseCursor.CurrentMode);
 
             if (menuBar != null)
                 menuBar.SetInfo("KazistovVv · десктопный интерфейс (стиль FreeCAD) · тема: " +
@@ -3018,11 +3053,62 @@ namespace KazistovVvUI
         void LateUpdate()
         {
             if (!built) return;
+
+            // §26 (Esc — ВАРИАНТ А): снимок «открыт ли контекст, который САМ обрабатывает Esc».
+            // Снимается В КОНЦЕ кадра, поэтому в следующем кадре это ровно «состояние на начало
+            // кадра» — ДО того, как панели отработали Esc. Без такого снимка одно нажатие Esc
+            // закрывало бы меню И переключало режим курсора (двойное действие): порядок
+            // выполнения Update у панелей и камеры не определён.
+            EscContextWasOpen = EscContextOpen();
+
             pointTrackTimer -= Time.unscaledDeltaTime;
             if (pointTrackTimer > 0f) return;
             pointTrackTimer = 0.5f;
             TrackPoints();
         }
+
+        /// <summary>
+        /// §26, ЗАДАЧА 3 (ВАРИАНТ А): открыт ли контекст, который обрабатывает Esc САМ.
+        /// Пока такой контекст есть, Esc принадлежит ему (закрыть меню, отменить действие),
+        /// и режим курсора не переключается. Когда контекста нет — Esc работает как Tab.
+        ///
+        /// Контексты (только чтение состояния, ничего не меняем):
+        ///   • палитра команд (Ctrl+P) и открытое меню верхней панели;
+        ///   • всплывающие группы тулбара и контекстное меню узла дерева;
+        ///   • размещение объекта / выбор типа робота (CenterWindow);
+        ///   • активная область или фокус клавиатурной навигации (KvKeyboardNav);
+        ///   • незавершённый сценарий потока и режим перемещения точки (сброс по Esc) —
+        ///     State Machine только ЧИТАЕТСЯ, её логика не тронута.
+        ///
+        /// Док-панели (дерево, свойства, настройки, горячие клавиши) контекстом НЕ считаются:
+        /// они не модальные, живут в раскладке рабочей среды и Esc их не закрывает.
+        /// </summary>
+        public bool EscContextOpen()
+        {
+            if (palette != null && palette.IsOpen) return true;
+            if (menuBar != null && menuBar.OpenMenuIndex >= 0) return true;
+            if (toolbar != null && toolbar.GroupMenuOpen) return true;
+
+            KvContextMenu contextMenu = KvContextMenu.Current;
+            if (contextMenu != null && contextMenu.IsOpen) return true;
+
+            if (centerWindow != null &&
+                (centerWindow.RobotChooserOpen || centerWindow.ActiveKind != SpawnKind.None)) return true;
+
+            if (keyboardNav != null &&
+                (keyboardNav.HasFocus || keyboardNav.Scope != KvKeyboardNav.NavScope.Toolbar)) return true;
+
+            TrajectoryFlowController f = Flow;
+            if (f != null && (f.IsPointMoveMode || f.State.phase != FlowState.Idle)) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// §26: был ли Esc-контекст открыт В НАЧАЛЕ текущего кадра. Читают: контроллер камеры
+        /// (вариант А) и диагностика. Обновляется один раз за кадр в <see cref="LateUpdate"/>.
+        /// </summary>
+        public static bool EscContextWasOpen { get; private set; }
 
         /// <summary>Публичное обновление интерфейса (для диагностики/тестов/меню редактора).</summary>
         public void Refresh()
@@ -3173,6 +3259,21 @@ namespace KazistovVvUI
         public KvGamepadRouter GamepadRouter { get { return gamepadRouter; } }
         /// <summary>Навигация по интерфейсу с клавиатуры (ЭТАП 11) — для диагностики.</summary>
         public KvKeyboardNav KeyboardNav { get { return keyboardNav; } }
+
+        /// <summary>
+        /// Навигация с клавиатуры ТЕКУЩЕГО интерфейса или null (безопасно, если интерфейса нет).
+        /// Нужна внешним системам ввода, чтобы уступить клавишу навигации: пока у кнопки
+        /// тулбара/меню есть фокус, Enter нажимает ЕЁ, а не подтверждает точку
+        /// (ФИКС §27 — комбинации клавиш, см. `FreeFlyCameraController`).
+        /// </summary>
+        public static KvKeyboardNav KeyboardNavOrNull
+        {
+            get
+            {
+                KazistovVvUIManager ui = Instance;
+                return ui != null ? ui.keyboardNav : null;
+            }
+        }
 
         /// <summary>Заново применить сохранённые настройки визуализаций к сцене (диагностика).</summary>
         public void ApplySettingsFromDiagnostics()

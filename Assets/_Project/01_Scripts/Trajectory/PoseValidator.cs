@@ -382,7 +382,12 @@ namespace TrajectoryCore
             Apply(q);
             nodes = ReadChain();
             tcp = nodes.Length > 0 ? nodes[nodes.Length - 1] : Vector3.zero;
-            float c = world.MinDistanceChain(nodes, linkRadius);
+            // ФИКС §27: у 6-осевого нулевой отрезок цепочки — колонна базы (Axis1→Axis2),
+            // стоящая на опоре, его контакт с миром считается нормой. У SCARA нулевой
+            // отрезок — РЕАЛЬНОЕ ПЛЕШО J1→J2, и пропускать его нельзя: раньше он не
+            // проверялся вообще (см. `CollisionWorld.MinDistanceChain`).
+            int firstSegment = six != null ? -1 : 0;
+            float c = world.MinDistanceChain(nodes, linkRadius, firstSegment);
 
             if (six != null)
             {

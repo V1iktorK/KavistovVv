@@ -59,7 +59,14 @@ namespace KazistovVvFeatures
         {
             Text t = KvWidgets.Label(content, "Info", provider != null ? provider() : "", KvTheme.FontSize,
                 color, TextAnchor.MiddleLeft);
-            KvTheme.Stretch(t.rectTransform, 6f, 6f);
+            // ФИКС 6 (§23): раньше строка растягивалась по обеим осям (`KvTheme.Stretch`) и в
+            // контейнере, который высотой детей НЕ управляет, получала нулевую высоту.
+            // Теперь: по горизонтали — на всю ширину панели, по вертикали — ровно одна строка.
+            RectTransform rt = t.rectTransform;
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.sizeDelta = new Vector2(-12f, 17f);
             LayoutElement le = t.gameObject.AddComponent<LayoutElement>();
             le.minHeight = 17f;
             le.preferredHeight = 17f;
@@ -88,6 +95,10 @@ namespace KazistovVvFeatures
             LayoutElement le = t.gameObject.AddComponent<LayoutElement>();
             le.minHeight = 16f;
             le.preferredHeight = 16f;
+            // ФИКС 6 (§23): высота строки ячейки задаётся явно — родительский контейнер
+            // высотой детей не управляет, и без этого текст «плавал» в дефолтных 100 px.
+            ((RectTransform)t.transform).sizeDelta =
+                new Vector2(((RectTransform)t.transform).sizeDelta.x, 16f);
             if (width > 0f)
             {
                 le.minWidth = width;
@@ -197,10 +208,18 @@ namespace KazistovVvFeatures
                 Action action = actions != null && i < actions.Length ? actions[i] : null;
                 Button button = KvTheme.CreateSmallButton(row, "Btn" + i, labels[i],
                     delegate { if (action != null) action(); });
+                // ФИКС 6 (§22): ширина кнопки задаётся ЯВНО (и в LayoutElement, и в sizeDelta).
+                // Строка KvWidgets.CreateRow управление размером детей НЕ включает, поэтому
+                // одного LayoutElement было мало: кнопка брала дефолтный sizeDelta нового
+                // RectTransform (100×100) и рисовалась огромным квадратом — на это и жаловался
+                // оператор во вкладках «Сглаживание траекторий» и «Деревья поведения».
+                float width = Mathf.Max(70f, labels[i].Length * 7.6f + 16f);
                 LayoutElement le = button.gameObject.AddComponent<LayoutElement>();
                 le.minHeight = 22f;
                 le.preferredHeight = 22f;
-                le.minWidth = Mathf.Max(70f, labels[i].Length * 7.6f + 16f);
+                le.minWidth = width;
+                le.preferredWidth = width;
+                ((RectTransform)button.transform).sizeDelta = new Vector2(width, 22f);
             }
         }
 
@@ -366,11 +385,13 @@ namespace KazistovVvFeatures
             KvWidgets.Fit(close.gameObject, 24f, 20f);
 
             // --- вкладки
-            RectTransform tabBar = KvWidgets.CreateRow(root, "Tabs", 22f, 4f);
+            // ФИКС 6 (§23): высота полосы вкладок — эталон KvWidgets.TabHeight (26 px, в
+            // требуемом диапазоне 24…28), сегменты ниже её на 2 px. Раньше было 22/20.
+            RectTransform tabBar = KvWidgets.CreateRow(root, "Tabs", KvWidgets.TabHeight, 4f);
             tabBar.anchorMin = new Vector2(0f, 1f);
             tabBar.anchorMax = new Vector2(1f, 1f);
             tabBar.pivot = new Vector2(0.5f, 1f);
-            tabBar.sizeDelta = new Vector2(0f, 22f);
+            tabBar.sizeDelta = new Vector2(0f, KvWidgets.TabHeight);
             tabBar.anchoredPosition = new Vector2(0f, -25f);
 
             // --- содержимое
@@ -382,7 +403,7 @@ namespace KazistovVvFeatures
             content.anchorMax = new Vector2(1f, 1f);
             content.pivot = new Vector2(0.5f, 1f);
             content.offsetMin = new Vector2(8f, 8f);
-            content.offsetMax = new Vector2(-8f, -50f);
+            content.offsetMax = new Vector2(-8f, -53f);   // ФИКС 6: полоса вкладок стала 26 px
             VerticalLayoutGroup vlg = contentGo.GetComponent<VerticalLayoutGroup>();
             vlg.spacing = 3f;
             vlg.padding = new RectOffset(4, 4, 4, 4);
@@ -419,7 +440,7 @@ namespace KazistovVvFeatures
                 {
                     activeTab = index;
                     BuildContent();
-                }, 20f);
+                }, KvWidgets.TabHeight - 2f);
         }
 
         private void BuildContent()

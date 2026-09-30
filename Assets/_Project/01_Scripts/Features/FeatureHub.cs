@@ -274,11 +274,22 @@ namespace KazistovVvFeatures
                 boundRobot = flow.Robot;
                 if (boundRobot != null)
                 {
-                    Gripper.Attach(boundRobot);
+                    // ФИКС 3. Захват собирается ТОЛЬКО если он сейчас НЕ на этом роботе.
+                    // Раньше `Attach` вызывался на каждое изменение привязки потока: пока
+                    // оператор вёл камеру, поток мог перекинуться на второй стенд и обратно,
+                    // захват пересобирался, а его раскрытие сбрасывалось в «разжат» — в прогоне
+                    // это выглядело как «пальцы не сдвинулись (75 → 75 мм)». Теперь состояние
+                    // пальцев переносится, а лишних пересборок нет.
+                    if (!Gripper.AttachedTo(boundRobot))
+                        Gripper.Attach(boundRobot);
                     Heatmap.RequestRebuild(true);
                     if (Clearance.Visible) Clearance.Rebuild(true);
                     Log.Add(KvLogKind.System, "новые функции привязаны к роботу «" +
-                                              boundRobot.robotName + "»");
+                                              boundRobot.robotName + "»" +
+                                              (Gripper.Attached
+                                                  ? " · захват: " + Gripper.Width.ToString("0.000") +
+                                                    " м (" + (Gripper.IsOpen ? "разжат" : "сжат") + ")"
+                                                  : " · захват не собран"));
                 }
             }
         }

@@ -74,7 +74,15 @@ namespace KazistovVvFeatures
         public KvVoiceOverService VoiceOver { get; private set; }
         public KvFailureSimulator Failures { get; private set; }
         public KvPreRunValidator PreRun { get; private set; }
+        /// <summary>ФИКС 9: два манекена рядом с рабочей зоной (учитываются в проверке перед пуском).</summary>
+        public KvMannequins Mannequins { get; private set; }
         public KvLogTools LogTools { get; private set; }
+        /// <summary>
+        /// СЛУЖБА ГРАФИКИ (раздел «Графика», сессия 18.09.2026): автоопределение железа,
+        /// пресеты, применение настроек HDRP. Живёт отдельно от хаба (собственный носитель
+        /// кадрового обслуживания), хаб только запускает её при инициализации — как требует ТЗ.
+        /// </summary>
+        public KvGraphicsService Graphics { get; private set; }
 
         private KazistovVvUIManager ui;
         private TrajectoryFlowController flow;
@@ -108,6 +116,10 @@ namespace KazistovVvFeatures
 
             // Строки этапов 13–36 (7 языков) — в словари интерфейса.
             KvLocExtra3.Install();
+            // Строки раздела «Графика» (7 языков) + сам раздел: служба читает PlayerPrefs,
+            // выполняет автоопределение при первом запуске и применяет настройки (ТЗ, этапы 1–5).
+            KvLocExtra4.Install();
+            Graphics = KvGraphicsService.EnsureStarted();
 
             Proxies = new KvCollisionOptimizer();
             Lab = new KvPlannerLab();
@@ -133,6 +145,7 @@ namespace KazistovVvFeatures
             VoiceOver = new KvVoiceOverService();
             Failures = new KvFailureSimulator();
             PreRun = new KvPreRunValidator();
+            Mannequins = new KvMannequins();
             LogTools = new KvLogTools();
 
             Proxies.Message += OnServiceMessage;
@@ -157,6 +170,7 @@ namespace KazistovVvFeatures
             VoiceOver.Message += OnServiceMessage;
             Failures.Message += OnServiceMessage;
             PreRun.Message += OnServiceMessage;
+            Mannequins.Message += OnServiceMessage;
             LogTools.Message += OnServiceMessage;
             BehaviorRunner.SetTree(Behavior);
 
@@ -164,6 +178,12 @@ namespace KazistovVvFeatures
                       "камеры, силы и тепло, PDF-отчёт, сеть, XR-ввод, макросы и дерево поведения, " +
                       "окружение и свет, кинорежим, отказы и проверка перед пуском, уровни журнала · " +
                       "строк локализации: " + KvLocExtra3.RegisteredCount);
+            if (Graphics != null)
+                Debug.Log("[Graphics] раздел «Графика» поднят: режим «" +
+                          KvGraphicsModel.Label(Graphics.Preset) + "» → " +
+                          KvGraphicsModel.Label(Graphics.EffectivePreset()) +
+                          " · графика " + (Graphics.Available ? "доступна" : "НЕдоступна (пакетный режим)") +
+                          " · строк локализации: " + KvLocExtra4.RegisteredCount);
         }
 
         private void OnDestroy()
@@ -268,6 +288,12 @@ namespace KazistovVvFeatures
                 VoiceOver.Bind(transform);
                 Failures.Bind(flow, features, stage3);
                 PreRun.Bind(flow, features, stage3, Failures, People, transform);
+                // ФИКС 9: два манекена рядом с рабочим местом робота — проверка перед пуском
+                // видит не только оператора. Создаются кодом (префабов и правки сцены нет),
+                // корневыми объектами сцены (см. KvMannequins.Ensure).
+                Mannequins.Ensure(flow.Robot);
+                Mannequins.ApplyLayout();                      // применить сохранённый вынос
+                PreRun.PersonSourceNote = Mannequins.SourceNote();
 
                 RegisterTabs();
                 if (flow.Robot != null) boundRobot = flow.Robot;
@@ -283,18 +309,30 @@ namespace KazistovVvFeatures
                 Proxies.ResetCache();
                 Heatmap.RequestRebuild(true);
                 Materials.Refresh(flow.Robot.transform);
+                // ФИКС 9: манекены переставляются к рабочему месту нового робота.
+                if (Mannequins != null) Mannequins.Ensure(boundRobot);
+                if (PreRun != null && Mannequins != null) PreRun.PersonSourceNote = Mannequins.SourceNote();
                 Debug.Log("[Stages4] сервисы перенастроены на робота «" + boundRobot.robotName +
                           "» (" + flow.Validator.Dof + " осей)");
             }
         }
 
-        /// <summary>Люди в сцене: оператор у камеры/шлема (пока других источников в проекте нет).</summary>
+        /// <summary>
+        /// Люди в сцене: оператор у камеры/шлема И манекены (ФИКС 9). Манекены добавляются
+        /// только если оператор не снял галочку «Учитывать манекены в проверке»
+        /// (по умолчанию — учитывать).
+        /// </summary>
         private Vector3[] People()
         {
             List<Vector3> points = new List<Vector3>();
             if (ui != null && ui.CameraRig != null)
                 points.Add(ui.CameraRig.transform.position);
             if (Camera.main != null) points.Add(Camera.main.transform.position);
+            if (Mannequins != null)
+            {
+                Vector3[] mannequins = Mannequins.Positions();
+                if (mannequins.Length > 0) points.AddRange(mannequins);
+            }
             return points.ToArray();
         }
 
@@ -335,7 +373,7 @@ namespace KazistovVvFeatures
             KvWorkbenchWindow.RegisterTab(new KvVoiceOverTab(VoiceOver));
 
             KvWorkbenchWindow.RegisterTab(new KvFailureTab(Failures));
-            KvWorkbenchWindow.RegisterTab(new KvValidateTab(PreRun, StartSelected));
+            KvWorkbenchWindow.RegisterTab(new KvValidateTab(PreRun, StartSelected, Mannequins));
             KvWorkbenchWindow.RegisterTab(new KvLogToolsTab(LogTools, KvActionLog.Instance));
 
             Debug.Log("[Stages4] вкладки этапов 13–36 зарегистрированы · всего вкладок: " +
@@ -833,6 +871,17 @@ namespace KazistovVvFeatures
                 "check", "Робот/Проверка перед пуском", delegate { hub.OpenTab("validate"); });
             Command("valid.run", "ПУСК с проверкой", "Проверить траекторию и запустить движение", "play",
                 "Робот/ПУСК с проверкой", delegate { hub.RequestRun(); });
+            // ФИКС 9: манекены учитываются в проверке перед пуском (по умолчанию — да).
+            Command("valid.mannequins", "Учитывать манекены в проверке",
+                "Два манекена рядом с рабочей зоной учитываются вместе с оператором",
+                "check", "Робот/Проверка перед пуском/Учитывать манекены",
+                delegate
+                {
+                    if (hub.Mannequins == null) return;
+                    hub.Mannequins.Include = !hub.Mannequins.Include;
+                    if (hub.PreRun != null) hub.PreRun.PersonSourceNote = hub.Mannequins.SourceNote();
+                },
+                delegate { return hub.Mannequins != null && hub.Mannequins.Include; });
 
             // --- ЭТАП 36: журнал
             Command("logtools.tab", "Журнал: уровни и поиск", "Фильтр по уровню, поиск, цвета, выгрузка",
@@ -840,8 +889,59 @@ namespace KazistovVvFeatures
             Command("logtools.export", "Выгрузить видимый журнал", "Сохранить отфильтрованные записи в файл",
                 "log", "Вид/Журнал: уровни и поиск/Выгрузить", delegate { hub.ExportLogView(); });
 
+            // --- РАЗДЕЛ «ГРАФИКА» (сессия 18.09.2026): подбор под железо и пресеты качества.
+            //     Команды только открывают раздел и вызывают службу — новых горячих клавиш
+            //     не добавляется, существующие бинды не затрагиваются.
+            KvGraphicsService graphics = hub.Graphics != null ? hub.Graphics : KvGraphicsService.EnsureStarted();
+            Command("graphics.tab", KvLocExtra4.T("cmd.graphics.tab", "Графика: настройки"),
+                KvLocExtra4.T("cmd.graphics.tab.desc",
+                    "Раздел «Графика» панели настроек: пресеты, качество, производительность, диагностика"),
+                "layout", "Вид/Графика",
+                delegate { OpenGraphicsTab(); });
+            Command("graphics.detect", KvLocExtra4.T("cmd.graphics.detect", "Определить графику по железу"),
+                KvLocExtra4.T("cmd.graphics.detect.desc",
+                    "Повторно определить видеокарту, память и процессор и пересчитать пресет"),
+                "features", "Вид/Графика/Определить по железу",
+                delegate { if (graphics != null) graphics.Redetect(true); });
+            Command("graphics.benchmark", KvLocExtra4.T("cmd.graphics.benchmark", "Бенчмарк графики"),
+                KvLocExtra4.T("cmd.graphics.benchmark.desc",
+                    "Замер кадровой частоты на 5 секунд: средний, минимальный FPS и просадки"),
+                "metrics", "Вид/Графика/Бенчмарк 5 секунд",
+                delegate { if (graphics != null) graphics.StartBenchmark(5f); });
+            Command("graphics.metrics", KvLocExtra4.T("cmd.graphics.metrics", "Метрики графики"),
+                KvLocExtra4.T("cmd.graphics.metrics.desc",
+                    "Оверлей: FPS, время кадра, вызовы отрисовки, треугольники, видеопамять"),
+                "heatmap", "Вид/Графика/Метрики",
+                delegate { KvGraphicsUi.ToggleMetrics(); },
+                delegate { return KvGraphicsUi.MetricsVisible; });
+            Command("graphics.reset", KvLocExtra4.T("cmd.graphics.reset", "Сбросить графику"),
+                KvLocExtra4.T("cmd.graphics.reset.desc",
+                    "Вернуть режим «Авто» и настройки графики по умолчанию"),
+                "reset", "Вид/Графика/Сбросить по умолчанию",
+                delegate { if (graphics != null) graphics.ResetToAuto(); });
+
+            // --- ФИКС 5: пересчёт кинематики SCARA — ТОЛЬКО по явному запросу оператора.
+            //     Ход призмы считается один раз при инициализации; этот пункт нужен после
+            //     ручной правки модели или сдвига нижней границы призмы (zLowerOffsetM).
+            Command("scara.recalibrate", "Пересчитать кинематику SCARA",
+                "Пересчитать пределы хода призмы и заново привязать поток (тяжёлая операция — " +
+                "по явному запросу, автоматически не выполняется)",
+                "reset", "Робот/Пересчитать кинематику SCARA",
+                delegate { if (hub.flow != null) hub.flow.RebindKinematics("команда оператора"); });
+
             Debug.Log("[Stages4] команды этапов 13–36 зарегистрированы · всего команд: " +
                       KvCommands.All.Count);
+        }
+
+        /// <summary>
+        /// Открыть раздел «Графика» в панели настроек. Номер вкладки берётся по имени,
+        /// поэтому добавление вкладок в панель этот вызов не ломает.
+        /// </summary>
+        public static void OpenGraphicsTab()
+        {
+            KazistovVvUIManager ui = KazistovVvUIManager.Instance;
+            if (ui == null) return;
+            ui.ShowSettings(KvSettingsView.GraphicsTabIndex);
         }
 
         private static void Command(string id, string title, string description, string icon,

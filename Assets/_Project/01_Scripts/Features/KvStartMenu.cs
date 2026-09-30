@@ -83,6 +83,28 @@ namespace KazistovVvFeatures
 
         public bool Visible { get { return visible; } }
         public float TimeInMenu { get { return timeInMenu; } }
+
+        /// <summary>
+        /// Меню открылось или закрылось ИМЕННО В ЭТОМ КАДРЕ (ФИКС 7, §23).
+        ///
+        /// Нужно контроллеру камеры: клик по пункту меню («Настройки» и т. п.) в том же кадре
+        /// доходит и до сцены — меню уже скрыто, поэтому проверка «курсор над панелью»
+        /// ничего не ловит, и клик срабатывал как действие в мире (оператор видел, что
+        /// вместо настроек запускается другой сценарий). Пока флаг поднят, клики по миру
+        /// не обрабатываются вообще.
+        /// </summary>
+        public static bool ChangedThisFrame
+        {
+            get { return lastChangeFrame == Time.frameCount; }
+        }
+
+        private static int lastChangeFrame = -1;
+
+        /// <summary>Запомнить кадр смены видимости меню (см. <see cref="ChangedThisFrame"/>).</summary>
+        private static void MarkChanged()
+        {
+            lastChangeFrame = Time.frameCount;
+        }
         /// <summary>Сколько пунктов в меню (диагностика).</summary>
         public int ButtonCount { get { return buttons.Count; } }
         /// <summary>Иконки пунктов меню по порядку (диагностика).</summary>
@@ -98,6 +120,23 @@ namespace KazistovVvFeatures
         {
             get { return PlayerPrefs.GetInt(PrefsKey, 1) != 0; }
             set { PlayerPrefs.SetInt(PrefsKey, value ? 1 : 0); PlayerPrefs.Save(); }
+        }
+
+        /// <summary>
+        /// БУДЕТ ЛИ МЕНЮ ПОКАЗАНО В ЭТОМ ЗАПУСКЕ (ФИКС 3, §22).
+        /// Нужно камере: пока меню открыто, курсор обязан остаться СВОБОДНЫМ, иначе пункты
+        /// меню невозможно нажать. Меню показывается через ~0.35 с после старта (когда поток
+        /// готов), то есть ПОЗЖЕ, чем `FreeFlyCameraController.Start()` выставляет курсор, —
+        /// поэтому решение принимается заранее, по флагу настройки и флагу хаба.
+        /// </summary>
+        public static bool WillShowOnLaunch
+        {
+            get
+            {
+                if (!ShowOnStart) return false;
+                KvStageHub2 hub = KvStageHub2.Current;
+                return hub == null || hub.showStartMenuOnLaunch;
+            }
         }
 
         // ================================================================== сборка
@@ -361,6 +400,7 @@ namespace KazistovVvFeatures
             visible = true;
             timeInMenu = 0f;
             SaveRig();
+            MarkChanged();
 
             if (flow == null || rig == null)
             {
@@ -374,7 +414,16 @@ namespace KazistovVvFeatures
             if (camera == null) camera = Camera.main;
 
             SelectedRig(true);
+            // ФИКС 5 (§23): на время облёта камерой управляет ТОЛЬКО меню — контроллер
+            // камеры не пишет поворот и позицию (иначе камера «колбасила»).
+            if (rig != null) rig.ExternalCameraControl = true;
             KazistovVvUIManager.SetUiVisible(false);
+            // ФИКС 3/4 (§22, §23): меню кликабельно — курсор СВОБОДЕН (это СИСТЕМНЫЙ курсор
+            // Unity, панели не трогаем: оболочку гасит строка выше, меню рисует свой экран).
+            // Пока меню открыто, клавиша переключения режима (Tab) игнорируется — иначе она
+            // отобрала бы мышь у меню и его пункты нельзя было бы нажать (§26).
+            KazistovVvUI.KvMouseCursor.ModeToggleSuspended = true;
+            KazistovVvUI.KvMouseCursor.Release("стартовое меню: системный курсор Unity", false);
             root.gameObject.SetActive(true);
             root.SetAsLastSibling();
             if (tip != null) tip.transform.SetAsLastSibling();
@@ -384,15 +433,32 @@ namespace KazistovVvFeatures
             Report(KvLocExtra.T("start.booted", "стартовое меню показано при запуске"));
         }
 
-        public void Hide()
+        /// <summary>
+        /// Закрыть меню. <paramref name="captureCursor"/>=true — сразу ВЕРНУТЬ захват курсора,
+        /// чтобы мышь без лишнего клика управляла камерой (ФИКС 3, §22). Так закрывают меню
+        /// Esc, «Новый проект», «Открыть сессию», демонстрация и обучение.
+        /// <paramref name="captureCursor"/>=false — курсор оставить свободным; так закрывают меню
+        /// перед открытием панели настроек (иначе оператор не сможет по ней кликать).
+        /// </summary>
+        public void Hide(bool captureCursor = true)
         {
             if (!visible) return;
             visible = false;
+            MarkChanged();
 
             if (root != null) root.gameObject.SetActive(false);
             if (tip != null) tip.Hide();
             RestoreRig();
+            // ФИКС 5 (§23): облёт закончился — камера снова принадлежит оператору.
+            // Свойство само синхронизирует yaw/pitch с фактическим поворотом камеры,
+            // поэтому перехода «рывком» не будет.
+            if (rig != null) rig.ExternalCameraControl = false;
             KazistovVvUIManager.SetUiVisible(true);
+            // §26: меню закрыто — клавиша переключения режима курсора (Tab) снова действует.
+            KazistovVvUI.KvMouseCursor.ModeToggleSuspended = false;
+            // ФИКС 3 (§22): раньше меню просто возвращало оболочку и НИЧЕГО не делало с курсором —
+            // после закрытия мышь оставалась «мёртвой» до отдельного клика/ПКМ.
+            if (captureCursor) KazistovVvUI.KvMouseCursor.Capture("стартовое меню закрыто");
             Report(KvLocExtra.T("start.closed", "стартовое меню закрыто — рабочая область"));
         }
 
@@ -526,11 +592,18 @@ namespace KazistovVvFeatures
             if (move != 0 && buttons.Count > 0)
                 Select((selected + move + buttons.Count) % buttons.Count);
 
+            // ФИКС 7 (§23): Enter нажимает пункт ТОЛЬКО если пункт реально подсвечен.
+            // Раньше стояло `Mathf.Clamp(selected, 0, count - 1)`: при снятой подсветке
+            // (мышь ушла с кнопки — `KvHoverHint` выставляет `Select(-1)`) «−1» превращался
+            // в «0», и Enter запускал ПЕРВЫЙ пункт — «Новый проект». Оператор видел ровно это:
+            // «из меню вместо настроек открывается новый проект».
             if (Down(KeyCode.Return) || Down(KeyCode.KeypadEnter))
             {
-                int index = Mathf.Clamp(selected, 0, buttonActions.Count - 1);
+                int index = selected;
                 if (index >= 0 && index < buttonActions.Count && buttonActions[index] != null)
                     buttonActions[index]();
+                else
+                    Report("пункт не подсвечен: выберите пункт стрелками ↑/↓ или наведите мышь");
             }
             if (Down(KeyCode.Escape)) Hide();
         }
@@ -618,9 +691,21 @@ namespace KazistovVvFeatures
         /// <summary>НАСТРОЙКИ: вернуть оболочку и открыть панель настроек.</summary>
         public void OpenSettings()
         {
-            Hide();
+            // ФИКС 10 (§22): меню закрывается БЕЗ захвата курсора — панель настроек должна
+            // остаться кликабельной (раньше после «Настройки» из меню курсор захватывался,
+            // и открывшаяся панель была недоступна мышью).
+            Hide(false);
             KazistovVvUIManager ui = KazistovVvUIManager.Instance;
-            if (ui != null) ui.ShowSettings(0);
+            if (ui == null)
+            {
+                Report("настройки не открыты: оболочка KazistovVv-UI ещё не собрана");
+                return;
+            }
+            ui.ShowSettings(0);
+            // ФИКС 7 (§23): пункт меню больше НЕ может запустить «Новый проект» (см. HandleKeys —
+            // Enter без подсветки раньше попадал в пункт 0). Чтобы это было видно в консоли,
+            // открытие настроек пишет свою строку, а не общий отчёт меню.
+            Report("настройки открыты из главного меню (вкладка «Функции»), курсор — системный");
         }
 
         /// <summary>ПОКАЗАТЬ ДЕМО (этап 3).</summary>

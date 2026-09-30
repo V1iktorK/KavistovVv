@@ -346,9 +346,21 @@ namespace KazistovVvUI
             return t;
         }
 
-        /// <summary>Плотная кнопка с подписью (диалоги/панели).</summary>
+        /// <summary>
+        /// Плотная кнопка с подписью (диалоги/панели).
+        ///
+        /// ФИКС 6 (§23): размер задаётся ЯВНО — и `LayoutElement`, и `sizeDelta`.
+        /// Раньше кнопка не имела ни того, ни другого, и в контейнере, который размерами
+        /// детей НЕ управляет (`childControlHeight = false` — так устроены вертикальные
+        /// списки панелей: настройки, функции, графика, автоматизация), она рисовалась
+        /// квадратом 100×100: это «слишком большие иконки/кнопки» со скриншотов оператора.
+        /// Высота = параметр <paramref name="height"/> (эталон 24 — KvWidgets.TextButtonHeight),
+        /// ширина — по длине подписи (та же оценка 7.6 px/символ + 16 px отступа, что в §22).
+        /// Вызывающий код по-прежнему может переопределить размер: он задаётся ДО возврата,
+        /// поэтому любые последующие `sizeDelta`/`Fit`/`Stretch` имеют приоритет.
+        /// </summary>
         public static Button CreateButton(RectTransform parent, string name, string label,
-            System.Action onClick, int height = 22, bool small = true)
+            System.Action onClick, int height = 24, bool small = true)
         {
             GameObject go = new GameObject(name, typeof(Image), typeof(Button));
             go.transform.SetParent(parent, false);
@@ -368,9 +380,19 @@ namespace KazistovVvUI
             cb.fadeDuration = 0.05f;
             btn.colors = cb;
 
+            // ФИКС 6 (§23): явный размер (см. комментарий выше).
+            int h = Mathf.Max(14, height);
+            float w = Mathf.Max(KvWidgets.MinTextButtonWidth, label.Length * KvWidgets.TextButtonCharWidth + 16f);
+            LayoutElement le = go.AddComponent<LayoutElement>();
+            le.minWidth = w;
+            le.preferredWidth = w;
+            le.minHeight = h;
+            le.preferredHeight = h;
+            ((RectTransform)go.transform).sizeDelta = new Vector2(w, h);
+
             Text txt = CreateText((RectTransform)go.transform, "Label", label,
                 small ? FontSizeSmall : FontSize, TextAnchor.MiddleCenter, TextMain);
-            Stretch(txt.rectTransform, 6, 2);
+            Stretch(txt.rectTransform, KvWidgets.ButtonPadding, 2);
 
             if (onClick != null) btn.onClick.AddListener(delegate { onClick(); });
             return btn;

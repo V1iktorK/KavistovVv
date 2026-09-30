@@ -155,16 +155,36 @@ namespace KazistovVvFeatures
             if (Changed != null) Changed();
         }
 
-        /// <summary>Позы текущего робота потока (для дерева моделей).</summary>
+        /// <summary>
+        /// Позы текущего робота потока (для дерева моделей и «Перейти в позу»).
+        ///
+        /// ФИКС 2. Раньше фильтр был только по ИМЕНИ робота, поэтому в список попадали позы
+        /// с ПУСТЫМ именем (сохранённые прежними версиями) — а среди них могли быть снимки
+        /// ДРУГОГО робота с другим числом осей. `MoveTo` такую позу честно отклоняет
+        /// («снята для робота с N осями»), и в прогоне это выглядело как «переезд не
+        /// запустился, поток остался в Idle». Теперь поза показывается, только если она
+        /// ПОДХОДИТ текущему роботу по числу осей: имя — главный признак, число осей —
+        /// обязательная проверка (у SCARA 3 оси, у робота с кистью 6).
+        /// </summary>
         public List<KvPosePreset> ForCurrentRobot()
         {
             List<KvPosePreset> result = new List<KvPosePreset>();
             string robot = flow != null && flow.Validator != null ? flow.Validator.RobotName : "";
+            int dof = flow != null && flow.Validator != null && flow.Validator.Ready
+                ? flow.Validator.Dof : 0;
+
             for (int i = 0; i < poses.Count; i++)
             {
-                if (string.IsNullOrEmpty(poses[i].robot) || string.IsNullOrEmpty(robot) ||
-                    poses[i].robot == robot)
-                    result.Add(poses[i]);
+                KvPosePreset pose = poses[i];
+                if (pose == null || pose.q == null || pose.q.Length == 0) continue;
+
+                // Число осей — обязательное условие: иначе поза физически не применима.
+                if (dof > 0 && pose.q.Length != dof) continue;
+
+                // Имя робота: своё — да; пустое (неизвестное) — только если оси совпали.
+                if (string.IsNullOrEmpty(pose.robot) || string.IsNullOrEmpty(robot) ||
+                    pose.robot == robot)
+                    result.Add(pose);
             }
             return result;
         }
@@ -236,20 +256,25 @@ namespace KazistovVvFeatures
         /// </summary>
         public string MoveTo(KvPosePreset pose)
         {
-            if (pose == null) return "поза не выбрана";
+            if (pose == null) return Refuse("поза не выбрана");
             if (flow == null || flow.Validator == null || !flow.Validator.Ready)
-                return "робот потока не готов";
-            if (flow.Motion == null) return "исполнитель движения недоступен";
-            if (flow.Motion.IsRunning) return "робот уже едет — сначала остановите движение";
+                return Refuse("робот потока не готов");
+            if (flow.Motion == null) return Refuse("исполнитель движения недоступен");
+            if (flow.Motion.IsRunning) return Refuse("робот уже едет — сначала остановите движение");
 
             double[] goal = pose.ToDoubles();
-            if (goal.Length == 0) return "в позе нет углов";
+            if (goal.Length == 0) return Refuse("в позе нет углов");
+            // ФИКС 2: причина отказа называется ПРЯМО и попадает в консоль, а не только в
+            // строку, которую вызывающий код может проигнорировать (именно так «переезд не
+            // запустился» и выглядел в пакетном прогоне).
             if (goal.Length != flow.Validator.Dof)
-                return "поза «" + pose.name + "» снята для робота с " + goal.Length +
-                       " осями, активный — с " + flow.Validator.Dof;
+                return Refuse("поза «" + pose.name + "» снята для робота с " + goal.Length +
+                              " осями (робот «" + pose.robot + "»), активный — «" +
+                              flow.Validator.RobotName + "» с " + flow.Validator.Dof + " осями");
 
             if (!flow.Validator.WithinLimits(goal))
-                return "поза «" + pose.name + "» вне лимитов активного робота";
+                return Refuse("поза «" + pose.name + "» вне лимитов активного робота «" +
+                              flow.Validator.RobotName + "»");
 
             double[] start = flow.Validator.CopyCurrent();
             start = flow.Validator.ContinueFrom(start, goal);   // кратчайшие довороты, без «полного оборота»
@@ -311,6 +336,18 @@ namespace KazistovVvFeatures
         {
             Debug.LogWarning("[Pose] " + message);
             if (Failed != null) Failed(message);
+        }
+
+        /// <summary>
+        /// ФИКС 2. Отказ переезда в позу: причина идёт и в консоль, и в подписчика (`Failed`),
+        /// и возвращается строкой. Раньше она только возвращалась — при вызове из диагностики
+        /// отказ выглядел как «переезд не запустился» без объяснения.
+        /// </summary>
+        private string Refuse(string reason)
+        {
+            Debug.LogWarning("[Pose] переезд в позу не запущен: " + reason);
+            if (Failed != null) Failed(reason);
+            return reason;
         }
     }
 

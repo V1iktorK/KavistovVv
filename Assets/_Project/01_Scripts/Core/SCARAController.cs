@@ -34,6 +34,15 @@ public class SCARAController : RobotController
     [Tooltip("Максимальный ПОДЪЁМ z_5 от стартовой высоты")]
     public float ZMax = 0.18f;
 
+    [Header("Нижняя граница призмы (ФИКС 6)")]
+    [Tooltip("Сдвиг НИЖНЕЙ границы хода призмы ВНИЗ, метры (0…0.10). По умолчанию 0.02: низ " +
+             "стержня может опуститься на 2 см ниже уровня столешницы, поэтому точка РОВНО на " +
+             "уровне стола снова достижима (без сдвига запас до нижнего предела призмы = 0°, " +
+             "а планировщику нужно ≥ 3°). Значение сохраняется в PlayerPrefs и возвращается " +
+             "при следующем запуске.")]
+    [Range(0f, 0.1f)]
+    [SerializeField] private float zLowerOffsetM = 0.02f;
+
     // --- DH-параметры (замеренные) ---
     private Vector3 verticalAxis;      // ось Z DH (вертикаль базы)
     private float link1Len;            // a1: плечо J1→J2 (горизонтальная проекция)
@@ -42,16 +51,109 @@ public class SCARAController : RobotController
     private Vector3 refDir1;           // стартовое направление звена 1 (для замера текущих углов)
     private Vector3 refDir2;           // стартовое направление звена 2
     private bool geometryCached;
+    private bool zTravelCalibrated;     // ход Z посчитан РОВНО ОДИН РАЗ (ФИКС 5)
     private bool referencesReported;
     private float lastAngle1;
     private float lastAngle2;
 
+    /// <summary>Ключ PlayerPrefs: сдвиг нижней границы призмы вниз, метры (ФИКС 6).</summary>
+    public const string ZLowerOffsetPrefsKey = "KazistovVv.Scara.ZLowerOffsetM";
+
+    /// <summary>Сдвиг нижней границы призмы вниз, метры (ФИКС 6).</summary>
+    public float ZLowerOffsetM { get { return zLowerOffsetM; } }
+
+    /// <summary>Ход Z уже посчитан по геометрии (повторно — только по явному запросу).</summary>
+    public bool KinematicsCalibrated { get { return zTravelCalibrated; } }
+
     protected override void Awake()
     {
         base.Awake();
+
+        // ФИКС 5. СЛУЖЕБНАЯ КОПИЯ МОДЕЛИ (фантом) — НЕ калибрует геометрию.
+        // PhantomManager.CreateGhost создаёт копию через Instantiate, поэтому Awake
+        // копии успевает отработать ДО того, как копию выключат и снимут с неё скрипты.
+        // Раньше каждая копия считала ход Z по СВОИМ Renderer.bounds (они зависят от
+        // текущей позы звеньев) и писала 3 строки в консоль — отсюда 165 строк за прогон.
+        // Копия наследует уже откалиброванные ZMin/ZMax робота, поэтому ей пересчёт не нужен.
+        if (IsServiceCopy)
+        {
+            geometryCached = true;
+            zTravelCalibrated = true;
+            return;
+        }
+
+        zLowerOffsetM = LoadZLowerOffset();
         ResolveJoints();
         CacheGeometry();
+        CalibrateZTravelOnce();
         EnsureCableFollow();
+    }
+
+    /// <summary>
+    /// Служебная копия модели (фантом). Признак — суффикс «(Clone)»: `Instantiate` даёт его
+    /// ДО вызова Awake, а HideInHierarchy копии выставляется уже ПОСЛЕ (см. CreateGhost).
+    /// Дополнительно страхуемся флагом HideInHierarchy — у объектов сцены его нет.
+    /// </summary>
+    private bool IsServiceCopy
+    {
+        get
+        {
+            if (name.EndsWith("(Clone)")) return true;
+            return (gameObject.hideFlags & HideFlags.HideInHierarchy) != 0;
+        }
+    }
+
+    /// <summary>
+    /// ФИКС 5: ход Z считается ОДИН РАЗ при инициализации робота и запоминается.
+    /// Повторный расчёт — только явным запросом оператора
+    /// (<see cref="RecalculateKinematics"/> / команда «Пересчитать кинематику SCARA»).
+    /// </summary>
+    private void CalibrateZTravelOnce()
+    {
+        if (zTravelCalibrated) return;
+        if (!geometryCached) return;      // ссылки на суставы ещё не разрешились — считать нечем
+        zTravelCalibrated = true;
+        ApplyZTravelFromGeometry();
+    }
+
+    /// <summary>
+    /// ФИКС 5/6: явный запрос «Пересчитать кинематику SCARA». Заново снимает геометрию
+    /// (длины звеньев, стартовую высоту z_5) и заново считает ход Z — например, после
+    /// ручной правки модели или изменения <see cref="ZLowerOffsetM"/>.
+    /// Сама кинематика (DH, IK, планировщик) не меняется: пересчитываются только пределы хода.
+    /// </summary>
+    public void RecalculateKinematics()
+    {
+        ResolveJoints();
+        geometryCached = false;
+        CacheGeometry();
+        zTravelCalibrated = false;
+        CalibrateZTravelOnce();
+    }
+
+    /// <summary>
+    /// ФИКС 6: сдвиг нижней границы призмы вниз, метры (0…0.10). Сохраняется в PlayerPrefs.
+    /// Возвращает true, если значение изменилось. После изменения ход Z пересчитывается.
+    /// </summary>
+    public bool SetZLowerOffsetM(float value)
+    {
+        float clamped = Mathf.Clamp(value, 0f, 0.1f);
+        if (Mathf.Abs(clamped - zLowerOffsetM) < 1e-5f) return false;
+        zLowerOffsetM = clamped;
+        PlayerPrefs.SetFloat(ZLowerOffsetPrefsKey, zLowerOffsetM);
+        PlayerPrefs.Save();
+        RecalculateKinematics();
+        Debug.Log("[SCARA] нижняя граница призмы сдвинута вниз на " +
+                  (zLowerOffsetM * 100f).ToString("0.#") + " см · ZMin = " +
+                  ZMin.ToString("0.000") + " м (сохранено в PlayerPrefs)");
+        return true;
+    }
+
+    /// <summary>Сдвиг нижней границы призмы из PlayerPrefs (иначе — значение из инспектора).</summary>
+    private float LoadZLowerOffset()
+    {
+        if (!PlayerPrefs.HasKey(ZLowerOffsetPrefsKey)) return zLowerOffsetM;
+        return Mathf.Clamp(PlayerPrefs.GetFloat(ZLowerOffsetPrefsKey, zLowerOffsetM), 0f, 0.1f);
     }
 
     /// <summary>
@@ -234,8 +336,17 @@ public class SCARAController : RobotController
     ///   * ВНИЗ: «кончик» (низ стержня) может опускаться до уровня столешницы,
     ///     на которой стоит робот (низ z_5 ≈ уровень базы); верхняя часть при
     ///     этом уходит в отверстие корпуса J2_4 — это нормально (отверстие шире).
+    ///     ФИКС 6: дополнительно нижняя граница сдвигается вниз на `zLowerOffsetM`,
+    ///     поэтому точка РОВНО на уровне стола перестаёт быть «в пределе» (запас 0° &lt; 3°).
     ///   * ВВЕРХ: низ стержня не должен прятаться в корпусе J2_4 (ход ограничен
     ///     нижней плоскостью корпуса).
+    ///
+    /// ФИКС 5. Замер ведётся ОТНОСИТЕЛЬНО собственного трансформа деталей и стартовой
+    /// высоты z_5, а не «как есть» по мировым `Renderer.bounds`: мировой AABB стержня
+    /// едет вместе с призмой и поворачивается вместе с J1/J2, из-за чего один и тот же
+    /// робот в разных позах давал разные пределы (в прогоне ZMax менялся 0.043 → 0.182
+    /// → 0.127). Теперь результат зависит только от геометрии модели, поэтому повторный
+    /// расчёт даёт ТУ ЖЕ величину и в консоль ничего не пишет.
     /// </summary>
     private void ApplyZTravelFromGeometry()
     {
@@ -254,18 +365,26 @@ public class SCARAController : RobotController
         Vector3 axis = verticalAxis.sqrMagnitude > 0.001f ? verticalAxis : Vector3.up;
         Vector3 basePos = baseTransform != null ? baseTransform.position : transform.position;
 
-        float rodBottom = Vector3.Dot(rod.bounds.min - basePos, axis); // низ стержня над базой
-        float rodTop = Vector3.Dot(rod.bounds.max - basePos, axis);
+        // Низ/верх стержня — в СТАРТОВОЙ высоте z_5: из мирового AABB вычитается
+        // собственный трансформ детали (он едет вместе с призмой), затем прибавляется
+        // стартовая высота. Разность «AABB − трансформ» от позы не зависит.
+        float rodBottom = initialHeight + Vector3.Dot(rod.bounds.min - rod.transform.position, axis);
+        float rodTop = initialHeight + Vector3.Dot(rod.bounds.max - rod.transform.position, axis);
+        // Корпус локтя вращается только вокруг вертикали, поэтому его мировые границы
+        // по высоте от позы не зависят.
         float housingBottom = Vector3.Dot(housing.bounds.min - basePos, axis);
         float housingRoof = Vector3.Dot(housing.bounds.max - basePos, axis);
 
-        // ВНИЗ: низ стержня опускается до уровня базы (столешницы).
-        float maxDown = Mathf.Max(0.02f, rodBottom - 0.002f); // 1.127-база(0.147 н.б.)≈…
+        // ВНИЗ: низ стержня опускается до уровня базы (столешницы) + сдвиг ФИКС 6.
+        float maxDown = Mathf.Max(0.02f, rodBottom - 0.002f) + zLowerOffsetM;
         float physicalMin = -maxDown;
         if (Mathf.Abs(ZMin - physicalMin) > 0.002f)
         {
-            Debug.Log("[SCARA] Ход Z вниз: " + ZMin + " -> " + physicalMin.ToString("0.000") +
-                      " (низ z_5 до столешницы; верх уходит в отверстие J2_4, оно шире стержня)");
+            Debug.Log("[SCARA] Ход Z вниз: " + ZMin.ToString("0.000") + " -> " +
+                      physicalMin.ToString("0.000") +
+                      " (низ z_5 " + rodBottom.ToString("0.000") + " м над базой, верх " +
+                      rodTop.ToString("0.000") + " м; сдвиг границы вниз " +
+                      (zLowerOffsetM * 100f).ToString("0.#") + " см)");
             ZMin = physicalMin;
         }
 
@@ -273,8 +392,10 @@ public class SCARAController : RobotController
         float maxUp = Mathf.Clamp(housingBottom - rodBottom - 0.005f, 0.01f, 0.2f);
         if (Mathf.Abs(ZMax - maxUp) > 0.002f)
         {
-            Debug.Log("[SCARA] Ход Z вверх: " + ZMax + " -> " + maxUp.ToString("0.000") +
-                      " (низ стержня не прячется в корпусе)");
+            Debug.Log("[SCARA] Ход Z вверх: " + ZMax.ToString("0.000") + " -> " +
+                      maxUp.ToString("0.000") + " (низ стержня не прячется в корпусе: низ " +
+                      housingBottom.ToString("0.000") + " м, верх корпуса " +
+                      housingRoof.ToString("0.000") + " м)");
             ZMax = maxUp;
         }
     }
@@ -333,10 +454,11 @@ public class SCARAController : RobotController
         initialHeight = Vector3.Dot(joint3.position - basePos, verticalAxis);
         geometryCached = true;
 
-        // Физический упор хода вниз: верхняя «пимпочка» z_5 (верх меша) должна
-        // упираться в крышку корпуса J2_4, а не входить в корпус. Максимальное
-        // опускание = зазор между верхом z_5 и верхом корпуса локтя (по вертикали).
-        ApplyZTravelFromGeometry();
+        // ФИКС 5: расчёт хода Z из этого метода УБРАН. Раньше он вызывался здесь, а этот
+        // метод дёргался из Awake КАЖДОЙ копии-фантома (и повторно из MoveToTarget, если
+        // геометрия не снялась) — отсюда 165 строк «Ход Z …» за один прогон.
+        // Теперь ход Z считается РОВНО ОДИН РАЗ: SCARAController.Awake → CalibrateZTravelOnce,
+        // а повторно — только явным запросом (RecalculateKinematics / команда оператора).
 
         Debug.Log("[SCARA] DH: a1=" + link1Len.ToString("0.000") + " a2=" +
                   link2Len.ToString("0.000") + ", вертикаль=" +

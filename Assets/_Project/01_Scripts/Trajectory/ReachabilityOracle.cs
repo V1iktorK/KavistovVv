@@ -198,7 +198,10 @@ namespace TrajectoryCore
                 Vector3 wrist = shoulder + wristDir * r + baseUp * zSlide;
 
                 var nodes = new List<Vector3> { shoulder, elbow, wrist };
-                float clearanceNow = world.MinDistanceChain(nodes, linkRadius);
+                // ФИКС §27: у SCARA оба звена рабочие, поэтому проверяются ВСЕ отрезки цепочки
+                // (раньше `MinDistanceChain` пропускал первый — плечо J1→J2 — и оракул
+                // показывал «запас достаточный» там, где плечо входило в препятствие).
+                float clearanceNow = world.MinDistanceChain(nodes, linkRadius, 0);
                 if (clearanceNow > bestClearance)
                 {
                     bestClearance = clearanceNow;

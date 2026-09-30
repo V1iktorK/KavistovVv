@@ -140,7 +140,13 @@ namespace KazistovVvFeatures
             Vector3 dir = camera.transform.position - center;
             angle = Mathf.Atan2(dir.z, dir.x);
 
-            KazistovVvUI.KazistovVvUIManager.SetUiVisible(false);
+            // ФИКС 1 (§23): оболочка и КУРСОР переключаются ВМЕСТЕ и через один источник
+            // правды. Раньше здесь гасился только канвас, а режим курсора не менялся:
+            // в презентационном режиме оставался системный курсор при скрытых панелях
+            // (и, наоборот, после выхода можно было «потерять» мышь) — ровно то, на что
+            // жаловался оператор. Режим курсора ведёт только KvMouseCursor.
+            KazistovVvUI.KvMouseCursor.ModeToggleSuspended = true;
+            KazistovVvUI.KvMouseCursor.Capture("презентационный режим: панели скрыты");
             Report("презентационный режим включён · " + KeyNext);
             return true;
         }
@@ -167,7 +173,12 @@ namespace KazistovVvFeatures
                 rig.rightHandEnabled = savedRightLaser;
                 rig.suppressDirectTeleop = savedSuppress;
             }
-            KazistovVvUI.KazistovVvUIManager.SetUiVisible(true);
+            // ФИКС 1 (§23): выход возвращает РОВНО прежний режим — оболочку показывает
+            // системный курсор (KvMouseCursor.Release), а не просто «включает канвас».
+            // §26: клавиша переключения режима (Tab) во время режима была заблокирована,
+            // поэтому снимаем блокировку до Release.
+            KazistovVvUI.KvMouseCursor.ModeToggleSuspended = false;
+            KazistovVvUI.KvMouseCursor.Release("презентационный режим выключен: системный курсор");
             Report("презентационный режим выключен");
         }
 

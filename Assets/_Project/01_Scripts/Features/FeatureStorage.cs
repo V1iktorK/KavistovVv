@@ -45,6 +45,25 @@ namespace KazistovVvFeatures
         public static string ScenariosDir { get { return EnsureDir(Path.Combine(Root, "Scenarios")); } }
         public static string ConfigDir { get { return EnsureDir(Path.Combine(Root, "Config")); } }
 
+        /// <summary>
+        /// Каталог отчётов прогонов и диагностики (ФИКС 10): `&lt;persistentDataPath&gt;/KazistovVv/Reports`.
+        /// </summary>
+        public static string ReportsDir { get { return EnsureDir(Path.Combine(Root, "Reports")); } }
+
+        /// <summary>
+        /// ФИКС 10. Путь отчётного файла прогона/диагностики. Пишем в `persistentDataPath`,
+        /// а НЕ в корень проекта: проект лежит в OneDrive, и во время PlayMode файл там
+        /// не дописывается (§12.10, §13.11) — строки отчёта терялись, и результат приходилось
+        /// вычитывать из лога Unity. `persistentDataPath` — локальный каталог вне синхронизации,
+        /// записи идут нормально и в редакторе, и в собранной игре.
+        /// Это РЕШЕНИЕ по расположению отчётов, а не обход ошибки.
+        /// </summary>
+        public static string ReportPath(string fileName)
+        {
+            string name = SafeName(string.IsNullOrEmpty(fileName) ? "report.txt" : fileName, "report.txt");
+            return Path.Combine(ReportsDir, name);
+        }
+
         /// <summary>Каталог существующей заготовки записи (ТЗ этапа 1: «используй существующую»).</summary>
         public static string LegacyRecordingFolder
         {

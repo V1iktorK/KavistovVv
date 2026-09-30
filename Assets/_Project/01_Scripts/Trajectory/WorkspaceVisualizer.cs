@@ -146,6 +146,8 @@ public class WorkspaceVisualizer : MonoBehaviour
     private float refreshTimer;
     private float scanTimer;
     private bool warnedNoRobot;
+    /// <summary>Строка «зон достижимости: N …» уже напечатана для текущего состава зон (ФИКС 5).</summary>
+    private bool loggedZones;
 
     /// <summary>Зона достижимости показывается (публичный флаг).</summary>
     public bool WorkspaceVisible => showWorkspace;
@@ -313,8 +315,13 @@ public class WorkspaceVisualizer : MonoBehaviour
             warnedNoRobot = true;
             Debug.Log("[Workspace] зона достижимости не построена: робот не найден или валидатор не готов.");
         }
-        else if (zones.Count > 0)
+        else if (zones.Count > 0 && !loggedZones)
         {
+            // ФИКС 5 (§23): строка печатается ОДИН раз на состав зон, а не при каждой
+            // пересборке. Раньше (см. ниже) зона пересобиралась каждые 0,5 с, и в консоль
+            // с полным стеком вызова уходили тысячи одинаковых строк — это и «краснило»
+            // консоль, и давало регулярные просадки кадра (камера «колбасила»).
+            loggedZones = true;
             Debug.Log("[Workspace] зон достижимости: " + zones.Count + " · " + DescribeZones());
         }
     }
@@ -388,46 +395,81 @@ public class WorkspaceVisualizer : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// СИГНАТУРА КОНФИГУРАЦИИ — печатается на момент сборки зоны и сравнивается в
+    /// <see cref="ConfigurationChanged"/>.
+    ///
+    /// ФИКС 5 (§23) — НАЙДЕННАЯ ПРИЧИНА «КАМЕРА КОЛБАСИТ»: сборка зоны сохраняла ОДНУ строку,
+    /// а проверка изменений строила ДРУГУЮ — с другим набором полей, другим их порядком и
+    /// другим форматом чисел. Две строки не могли совпасть НИКОГДА, поэтому
+    /// `ConfigurationChanged()` возвращала «true» на каждом вызове, и зона достижимости
+    /// (два робота: меши, материалы, объекты сцены) пересобиралась КАЖДЫЕ 0,5 С, каждый раз
+    /// печатая строку в консоль с полным стеком вызова. Это и была та самая регулярная
+    /// просадка кадра, из-за которой камера «периодически колбасила».
+    ///
+    /// Теперь сигнатуру считает ОДНА функция <see cref="SignatureOf"/> и для сборки, и для
+    /// сравнения, поэтому в неё входит ровно то, что описано в её имени: имя робота, число
+    /// осей, длины звеньев, лимиты суставов, положение базы и (для SCARA) ход призмы.
+    /// Намеренно НЕ входит вылет до TCP: он зависит от ТЕКУЩЕЙ позы, то есть «конфигурацией»
+    /// не является — иначе зона пересобиралась бы при каждом движении робота.
+    /// </summary>
     private static string SignatureOf(Zone z)
     {
         if (z.robot == null) return "none";
         PoseValidator v = z.validator;
-        string lim = "";
-        for (int i = 0; i < v.Dof; i++) lim += (v.Upper[i] - v.Lower[i]).ToString("F1") + ",";
-        return z.robot.robotName + "|dof" + v.Dof + "|r" + z.radius.ToString("F3") + "|ri" +
-               z.innerRadius.ToString("F3") + "|b" + z.robot.transform.position.ToString("F2") +
-               "|z" + z.zMin.ToString("F2") + "/" + z.zMax.ToString("F2") + "|" + lim;
+        // Длины звеньев считаются по пивотам суставов от их взаимного расположения —
+        // от позы это не зависит.
+        double[] q = v.CopyCurrent();
+        int n = Mathf.Max(1, v.Dof);
+        var pivots = new Vector3[n];
+        var axes = new Vector3[n];
+        float sum = 0f;
+        try
+        {
+            v.JointFrames(q, pivots, axes);
+            for (int i = 0; i + 1 < v.Dof; i++) sum += Vector3.Distance(pivots[i], pivots[i + 1]);
+        }
+        catch (System.Exception) { }
+
+        return SignatureBuild(z.robot.robotName, v.Dof, sum, z.robot.transform.position,
+            v.Lower, v.Upper, z.scara);
     }
 
-    /// <summary>Сменилась ли конфигурация (звенья/лимиты/база/тип) — тогда зона пересобирается.</summary>
+    /// <summary>Сборка строки сигнатуры — ЕДИНСТВЕННОЕ место, где задан её формат.</summary>
+    private static string SignatureBuild(string robotName, int dof, float linkSum,
+        Vector3 basePos, float[] lower, float[] upper, bool scara)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(robotName).Append("|dof").Append(dof)
+          .Append("|L").Append(linkSum.ToString("F3"))
+          .Append("|b").Append(basePos.x.ToString("F2")).Append(',')
+          .Append(basePos.y.ToString("F2")).Append(',').Append(basePos.z.ToString("F2"));
+        for (int i = 0; i < dof; i++)
+        {
+            float lo = lower != null && i < lower.Length ? lower[i] : 0f;
+            float hi = upper != null && i < upper.Length ? upper[i] : 0f;
+            sb.Append("|q").Append(i).Append(' ').Append((hi - lo).ToString("F1"));
+        }
+        if (scara)
+        {
+            float zlo = lower != null && lower.Length > 2 ? lower[2] : 0f;
+            float zhi = upper != null && upper.Length > 2 ? upper[2] : 0f;
+            sb.Append("|z").Append(zlo.ToString("F2")).Append('/').Append(zhi.ToString("F2"));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Сменилась ли КОНФИГУРАЦИЯ (звенья/лимиты/база/тип) — тогда зона пересобирается.</summary>
     private bool ConfigurationChanged()
     {
         if (zones.Count == 0) return true;
         foreach (Zone z in zones)
         {
             if (z.robot == null) return true;
-            PoseValidator v = z.validator;
-            if (!v.Ready) return true;
-            double[] q = v.CopyCurrent();
-            int n = Mathf.Max(1, v.Dof);
-            var pivots = new Vector3[n];
-            var axes = new Vector3[n];
-            v.JointFrames(q, pivots, axes);
-            float sum = 0f;
-            for (int i = 0; i + 1 < v.Dof; i++) sum += Vector3.Distance(pivots[i], pivots[i + 1]);
-            string sig = z.robot.robotName + "|dof" + v.Dof + "|r" + sum.ToString("F3");
-            if (z.scara)
-            {
-                sig += "|z" + v.Lower[2].ToString("F2") + "/" + v.Upper[2].ToString("F2");
-            }
-            else
-            {
-                SixAxisController six = z.robot as SixAxisController;
-                Transform tcpT = six != null ? (six.tcp != null ? six.tcp : six.endEffector) : null;
-                if (tcpT != null)
-                    sig += "|tip" + Vector3.Distance(pivots[v.Dof - 1], tcpT.position).ToString("F3");
-            }
-            if (sig != z.signature) return true;
+            if (!z.validator.Ready) return true;
+            // ФИКС 5 (§23): сравнивается ТА ЖЕ строка, что сохранена при сборке (SignatureOf),
+            // а не «похожая, но другая» — иначе зона пересобиралась каждые 0,5 с.
+            if (SignatureOf(z) != z.signature) return true;
         }
         return false;
     }
@@ -735,6 +777,7 @@ public class WorkspaceVisualizer : MonoBehaviour
         }
         zones.Clear();
         warnedNoRobot = false;
+        loggedZones = false;
     }
 
     // ------------------------------------------------------------------ индикаторы лимитов

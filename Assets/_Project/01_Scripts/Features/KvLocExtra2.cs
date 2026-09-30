@@ -20,6 +20,16 @@ namespace KazistovVvFeatures
         /// <summary>Сколько строк добавлено модулем (диагностика).</summary>
         public static int RegisteredCount { get { return registered; } }
 
+        /// <summary>ФИКС 13: сколько строк в таблице модуля (для теста покрытия 7 языков).</summary>
+        public static int RowCount { get { return Rows.Length; } }
+
+        /// <summary>ФИКС 13: ключ строки таблицы по номеру (для теста покрытия 7 языков).</summary>
+        public static string KeyAt(int index)
+        {
+            if (index < 0 || index >= Rows.Length) return "";
+            return Rows[index] != null && Rows[index].Length > 0 ? Rows[index][0] : "";
+        }
+
         /// <summary>Перевод по ключу (fallback — русский текст из кода).</summary>
         public static string T(string key, string fallback)
         {

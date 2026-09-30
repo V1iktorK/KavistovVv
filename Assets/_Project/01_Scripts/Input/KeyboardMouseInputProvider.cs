@@ -118,8 +118,8 @@ public class KeyboardMouseInputProvider : InputProvider
     }
 
     /// <summary>
-    /// Смена робота. Клавиша — только F: TAB занят переключением РЕЖИМА UI
-    /// (`FreeFlyCameraController.ToggleUiMode`, бинд перенесён с CAPS LOCK),
+    /// Смена робота. Клавиша — только F: TAB переключает РЕЖИМ КУРСОРА
+    /// (§26: режим камеры ⟷ режим интерфейса, KvMouseCursor), CAPS LOCK не делает ничего,
     /// а F — та же клавиша, которой робот выбирается лучом в `FreeFlyCameraController`.
     /// Так одна клавиша не может делать два разных действия.
     /// </summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -12,6 +13,51 @@ namespace KazistovVvUI
     /// </summary>
     public static class KvWidgets
     {
+        // ================================================================== ЭТАЛОН РАЗМЕРОВ
+        // (ФИКС 6, §22; зафиксирован здесь по §0.6, ЭТАП 10 — «единый набор иконок».)
+        //
+        //   • СЕТКА ИКОНОК: KvIcons.GridSize = 24, штрих KvIcons.Stroke = 1.5 px
+        //     (мелкие детали — KvIcons.StrokeThin = 1.2 px). Это эталон для ВСЕХ иконок.
+        //   • Кнопка тулбара: квадрат 24×24, глиф 0.78 · 24 ≈ 19 px (см. IconButton).
+        //   • Строка-переключатель (галка): высота 20 px, КВАДРАТ галки 16×16,
+        //     глиф галки 12×12 — та же пропорция 0.78, что и у кнопки тулбара.
+        //   • Галки в меню (KvMenuBar / KvContextMenu): 10×10 при высоте строки 18 px.
+        //
+        // ПОЧЕМУ ЭТО ВЫНЕСЕНО В КОНСТАНТЫ (корень ФИКСА 6): строка переключателя —
+        // это HorizontalLayoutGroup, и раньше у неё было childControlWidth = false.
+        // В таком режиме Unity берёт РАЗМЕР ребёнка из его `sizeDelta` (у нового
+        // RectTransform это 100×100), а НЕ из LayoutElement. Поэтому квадрат галки
+        // получался 100×100, а иконка «✓» (она растянута по квадрату) — во весь квадрат:
+        // ровно то, что оператор описал как «слишком большие квадратики».
+        // Размеры задаются ЯВНО и проверяются методом <see cref="ValidateSizes"/>.
+        public const float SwitchRowHeight = 20f;
+        public const float SwitchBoxSize = 16f;
+        public const int SwitchCheckIcon = 12;
+        /// <summary>Доля квадрата, которую занимает глиф (эталон 0.78 — как у кнопки тулбара).</summary>
+        public const float GlyphRatio = 0.78f;
+
+        // ---- эталон §23 (ФИКС 6, дополнение к §22) --------------------------------------
+        //   • Кнопка-иконка: квадрат 24×24, глиф 0.78 · 24 ≈ 19 (см. IconButton);
+        //   • Кнопка с текстом: высота 24, внутренний отступ 6 px (KvTheme.CreateButton);
+        //   • ВКЛАДКА (панель настроек, верстак): высота 26 — внутри требуемого диапазона
+        //     24…28, шрифт мелкий (FontSizeSmall).
+        //
+        // ПОЧЕМУ ЭТО ВАЖНО: `RectTransform` нового объекта по умолчанию имеет sizeDelta
+        // 100×100. Если контейнер НЕ управляет размерами детей (`childControlWidth/Height =
+        // false` — так устроены строки `CreateRow`), Unity берёт размер ребёнка ИМЕННО из
+        // sizeDelta, а `LayoutElement` игнорирует. Поэтому у каждой кнопки размер задаётся
+        // ЯВНО И ДВАЖДЫ (LayoutElement + sizeDelta) — это и есть лечение «огромных
+        // квадратиков» и «непонятных +/−» (ФИКС 8: кнопки «развернуть/свернуть дерево»).
+        public const float IconButtonSize = 24f;
+        public const float TextButtonHeight = 24f;
+        public const float TabHeight = 26f;
+        /// <summary>Внутренний отступ кнопки с текстом (эталон).</summary>
+        public const float ButtonPadding = 6f;
+        /// <summary>Минимальная ширина кнопки с текстом (до подгонки по длине подписи).</summary>
+        public const float MinTextButtonWidth = 60f;
+        /// <summary>Ширина одного символа подписи в пикселях (та же оценка, что в §22).</summary>
+        public const float TextButtonCharWidth = 7.6f;
+
         // ------------------------------------------------------------------ контейнеры
 
         public static RectTransform CreateRow(RectTransform parent, string name, float height,
@@ -32,6 +78,12 @@ namespace KazistovVvUI
                 LayoutElement le = go.AddComponent<LayoutElement>();
                 le.minHeight = height;
                 le.preferredHeight = height;
+                // ФИКС 6 (§22): высота строки задаётся ЕЩЁ И ЯВНО. LayoutElement работает
+                // только когда родитель управляет размером детей (childControlHeight = true),
+                // а контейнеры вкладок верстака и панели функций это управление ВЫКЛЮЧАЮТ —
+                // тогда строка брала дефолтный sizeDelta (100 px) и все «квадратики»
+                // выглядели огромными. Ширина НЕ трогается: её задаёт родитель.
+                rt.sizeDelta = new Vector2(rt.sizeDelta.x, height);
             }
             return rt;
         }
@@ -58,12 +110,31 @@ namespace KazistovVvUI
             return rt;
         }
 
+        /// <summary>
+        /// Задать размер элементу — И через `LayoutElement`, И через `sizeDelta` (ФИКС 6, §23).
+        ///
+        /// ПОЧЕМУ ОБА: `LayoutElement` работает ТОЛЬКО когда родитель управляет размерами детей
+        /// (`childControlWidth/Height = true`). Панели настроек, функций, графики и верстака
+        /// это управление выключают (`childControlHeight = false`), и тогда Unity берёт размер
+        /// ребёнка из его `sizeDelta` — у нового `RectTransform` это 100×100. Отсюда «слишком
+        /// большие» строки, галки, подписи и кнопки на скриншотах оператора: сам элемент был
+        /// 16×16, а СТРОКА вокруг него — 100 px. Дублирование значения в `sizeDelta` лечит это
+        /// у всех, кто уже вызывает `Fit`, без правки каждого места по отдельности.
+        /// </summary>
         public static LayoutElement Fit(GameObject go, float width, float height)
         {
             LayoutElement le = go.GetComponent<LayoutElement>();
             if (le == null) le = go.AddComponent<LayoutElement>();
             if (width > 0f) { le.minWidth = width; le.preferredWidth = width; }
             if (height > 0f) { le.minHeight = height; le.preferredHeight = height; }
+
+            RectTransform rt = go.transform as RectTransform;
+            if (rt != null && (width > 0f || height > 0f))
+            {
+                float w = width > 0f ? width : rt.sizeDelta.x;
+                float h = height > 0f ? height : rt.sizeDelta.y;
+                rt.sizeDelta = new Vector2(w, h);
+            }
             return le;
         }
 
@@ -99,6 +170,7 @@ namespace KazistovVvUI
 
         /// <summary>
         /// Кнопка ТОЛЬКО с иконкой (без подписи) — основной элемент тулбара FreeCAD.
+        /// Размер задаётся ЯВНО и дважды (ФИКС 6/8 §23): LayoutElement И sizeDelta.
         /// </summary>
         public static KvIconButton IconButton(RectTransform parent, string name, string iconId,
             float size, Action onClick)
@@ -117,6 +189,14 @@ namespace KazistovVvUI
             le.preferredWidth = size;
             le.preferredHeight = size;
 
+            // ФИКС 6/8 (§23): без этой строки кнопка в строке `CreateRow` (там
+            // childControlWidth/Height = false) рисовалась квадратом 100×100 — так и
+            // выглядели «непонятные + и −» в панели дерева: это кнопки «раскрыть/свернуть
+            // всё дерево», у которых LayoutElement игнорировался, а глиф «+»/«−» был виден
+            // в углу огромного квадрата. Явный sizeDelta работает при ЛЮБОМ родителе.
+            RectTransform selfRect = (RectTransform)go.transform;
+            selfRect.sizeDelta = new Vector2(size, size);
+
             Button btn = go.GetComponent<Button>();
             btn.targetGraphic = bg;
             ColorBlock cb = btn.colors;
@@ -131,13 +211,13 @@ namespace KazistovVvUI
             GameObject iconGo = new GameObject("Icon", typeof(Image));
             iconGo.transform.SetParent(go.transform, false);
             Image icon = iconGo.GetComponent<Image>();
-            icon.sprite = KvIcons.Get(iconId, Mathf.RoundToInt(size * 0.78f));
+            icon.sprite = KvIcons.Get(iconId, Mathf.RoundToInt(size * GlyphRatio));
             icon.color = KvTheme.IconTint;
             icon.raycastTarget = false;
             RectTransform ir = icon.rectTransform;
             ir.anchorMin = ir.anchorMax = new Vector2(0.5f, 0.5f);
             ir.pivot = new Vector2(0.5f, 0.5f);
-            float iconSize = size * 0.78f;
+            float iconSize = size * GlyphRatio;
             ir.sizeDelta = new Vector2(iconSize, iconSize);
             ir.anchoredPosition = Vector2.zero;
             if (icon.sprite == null) iconGo.SetActive(false);
@@ -204,13 +284,20 @@ namespace KazistovVvUI
             h.childAlignment = TextAnchor.MiddleLeft;
             h.childForceExpandWidth = false;
             h.childForceExpandHeight = false;
-            h.childControlWidth = false;
-            h.childControlHeight = false;
+            // ФИКС 6 (§22): управление размером ВКЛЮЧЕНО — теперь LayoutElement (min/preferred)
+            // реально применяется, а не игнорируется в пользу дефолтного sizeDelta 100×100.
+            h.childControlWidth = true;
+            h.childControlHeight = true;
             h.padding = new RectOffset(3, 3, 1, 1);
 
             LayoutElement rle = rowGo.GetComponent<LayoutElement>();
-            rle.minHeight = 18f;
-            rle.preferredHeight = 18f;
+            rle.minHeight = SwitchRowHeight;
+            rle.preferredHeight = SwitchRowHeight;
+            // ФИКС 6 (§23): высота строки задаётся ЕЩЁ И ЯВНО — панель настроек выключает
+            // управление высотой детей (`childControlHeight = false`), и тогда `LayoutElement`
+            // не действует: строка-галка («Зона достижимости» и остальные пункты «Функций»)
+            // получала дефолтные 100 px. Теперь строка ровно 20 px, а квадрат галки — 16×16.
+            row.sizeDelta = new Vector2(row.sizeDelta.x, SwitchRowHeight);
 
             Button rowButton = rowGo.GetComponent<Button>();
             rowButton.targetGraphic = bg;
@@ -228,22 +315,30 @@ namespace KazistovVvUI
             box.sprite = KvTheme.WhiteSprite;
             box.color = initial ? KvTheme.ButtonChecked : KvTheme.ButtonBg;
             box.raycastTarget = false;
-            Fit(boxGo, 14f, 14f);
+            // Размер квадрата — ИЗ ЭТАЛОНА и ЯВНО (LayoutElement + sizeDelta):
+            // до первого пересчёта раскладки HorizontalLayoutGroup ещё не применил
+            // preferred-размер, и без sizeDelta квадрат на один кадр был бы 100×100.
+            Fit(boxGo, SwitchBoxSize, SwitchBoxSize);
+            RectTransform boxRect = (RectTransform)boxGo.transform;
+            boxRect.sizeDelta = new Vector2(SwitchBoxSize, SwitchBoxSize);
 
             GameObject checkGo = new GameObject("Check", typeof(Image));
             checkGo.transform.SetParent(boxGo.transform, false);
             Image check = checkGo.GetComponent<Image>();
-            check.sprite = KvIcons.Get("check", 11);
+            check.sprite = KvIcons.Get("check", SwitchCheckIcon);
             check.color = KvTheme.IsLight ? Color.white : KvTheme.TextMain;
             check.raycastTarget = false;
-            KvTheme.Stretch(check.rectTransform, 1f, 1f, 1f, 1f);
+            // Глиф вписан в квадрат с полем 2 px (16 − 2·2 = 12 = SwitchCheckIcon):
+            // иконка берётся из ЕДИНОГО набора KvIcons, а не растягивается по квадрату.
+            KvTheme.Stretch(check.rectTransform, 2f, 2f, 2f, 2f);
             checkGo.SetActive(initial);
 
             Text labelText = KvTheme.CreateText(row, "Label", label, KvTheme.FontSizeSmall,
                 TextAnchor.MiddleLeft, KvTheme.TextMain);
             LayoutElement le = labelText.gameObject.AddComponent<LayoutElement>();
             le.flexibleWidth = 1f;
-            le.minHeight = 16f;
+            le.minHeight = SwitchBoxSize;
+            le.preferredHeight = SwitchBoxSize;
 
             KvSwitch view = rowGo.AddComponent<KvSwitch>();
             view.Bind(box, checkGo, initial);
@@ -263,9 +358,23 @@ namespace KazistovVvUI
             int initial, Action<int> onChanged, float height = 20f)
         {
             RectTransform row = CreateRow(parent, "Seg_" + name, height, 2f);
+            // ФИКС 6 (§22): сегменты делят строку ПОРОВНУ, поэтому здесь управление размером
+            // ВКЛЮЧЕНО. Раньше (childControlWidth = false) LayoutElement.flexibleWidth не
+            // действовал, и каждая кнопка сегмента рисовалась квадратом 100×100 — это и были
+            // «слишком большие квадратики» в переключателях темы/масштаба/вкладок верстака.
+            HorizontalLayoutGroup segRow = row.GetComponent<HorizontalLayoutGroup>();
+            if (segRow != null)
+            {
+                segRow.childControlWidth = true;
+                segRow.childControlHeight = true;
+            }
             Image bg = KvTheme.CreatePanel(row, "Bg", KvTheme.ButtonPressed);
             KvTheme.Stretch(bg.rectTransform);
             bg.transform.SetAsFirstSibling();
+            // Фон растянут на всю строку и в раскладке не участвует: иначе при включённом
+            // управлении размером он получил бы нулевую ширину и пропал (ФИКС 6, §22).
+            LayoutElement bgLe = bg.gameObject.AddComponent<LayoutElement>();
+            bgLe.ignoreLayout = true;
 
             KvSegmented view = row.gameObject.AddComponent<KvSegmented>();
             List<Button> buttons = new List<Button>();
@@ -276,7 +385,10 @@ namespace KazistovVvUI
                 int index = i;
                 Button b = KvTheme.CreateButton(row, "Seg" + i, options[i], null,
                     Mathf.RoundToInt(height), true);
-                Fit(b.gameObject, 0f, height);
+                Fit(b.gameObject, 60f, height);
+                // ФИКС 6 (§23): размер сегмента задаётся ещё и явно — на случай контейнера,
+                // который размерами детей не управляет (тогда LayoutElement игнорируется).
+                ((RectTransform)b.transform).sizeDelta = new Vector2(60f, height);
                 LayoutElement le = b.GetComponent<LayoutElement>();
                 le.flexibleWidth = 1f;
                 images.Add(b.GetComponent<Image>());
@@ -292,14 +404,110 @@ namespace KazistovVvUI
             return view;
         }
 
-        /// <summary>Информационная строка (подсказка/пометка) в панели настроек.</summary>
+        /// <summary>
+        /// Информационная строка (подсказка/пометка) в панели настроек.
+        ///
+        /// ФИКС 6 (§23): текст переносится по ширине, поэтому высота считается ПО СОДЕРЖИМОМУ
+        /// (`ContentSizeFitter`), а «пол» — одна строка. Раньше подсказка без явной высоты
+        /// получала дефолтные 100 px и раздувала панель: именно это давало ощущение
+        /// «всё слишком большое и растянутое» в настройках и на вкладках верстака.
+        /// Если высота задана вызывающим — она и применяется (ContentSizeFitter не добавляется).
+        /// </summary>
         public static Text Note(RectTransform parent, string text, Color color, float height = 0f)
         {
             Text t = KvTheme.CreateText(parent, "Note", text, KvTheme.FontSizeSmall,
                 TextAnchor.UpperLeft, color);
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
-            if (height > 0f) Fit(t.gameObject, 0f, height);
+            if (height > 0f)
+            {
+                Fit(t.gameObject, 0f, height);
+                return t;
+            }
+
+            float line = KvTheme.FontSizeSmall + 5f;
+            Fit(t.gameObject, 0f, line);
+            ContentSizeFitter fitter = t.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
             return t;
+        }
+
+        // ------------------------------------------------------------------ проверка эталона
+
+        /// <summary>
+        /// ПРОВЕРКА ЭТАЛОНА РАЗМЕРОВ (ФИКС 6 §22, дополнено ФИКСАМИ 6/8 §23). Возвращает
+        /// отчёт «проверка — результат» и одну строку итога; ничего не меняет и ничего
+        /// не требует из сцены. Запускается диагностикой/тестами, чтобы «квадратики»,
+        /// «огромные иконки» и «непонятные +/−» не разъехались снова.
+        /// </summary>
+        public static string ValidateSizes()
+        {
+            StringBuilder sb = new StringBuilder();
+            int failures = 0;
+
+            failures += Check(sb, "сетка иконок KvIcons.GridSize = 24",
+                KvIcons.GridSize == 24, "GridSize = " + KvIcons.GridSize);
+            failures += Check(sb, "штрих иконок KvIcons.Stroke = 1.5 px",
+                Mathf.Abs(KvIcons.Stroke - 1.5f) < 0.001f, "Stroke = " + KvIcons.Stroke);
+            failures += Check(sb, "квадрат галки 16×16",
+                Mathf.Abs(SwitchBoxSize - 16f) < 0.01f, "SwitchBoxSize = " + SwitchBoxSize);
+            failures += Check(sb, "глиф галки = SwitchBoxSize · GlyphRatio",
+                Mathf.Abs(SwitchBoxSize * GlyphRatio - SwitchCheckIcon) < 0.6f,
+                SwitchBoxSize + " · " + GlyphRatio + " = " + (SwitchBoxSize * GlyphRatio).ToString("0.0") +
+                " , иконка " + SwitchCheckIcon);
+            failures += Check(sb, "квадрат галки меньше строки переключателя",
+                SwitchBoxSize < SwitchRowHeight, SwitchBoxSize + " < " + SwitchRowHeight);
+            failures += Check(sb, "иконка галки из единого набора KvIcons",
+                KvIcons.Get("check", SwitchCheckIcon) != null, "KvIcons.Get(\"check\") != null");
+
+            // ---- ФИКС 6/8 (§23): эталон кнопок и вкладок ----
+            failures += Check(sb, "кнопка-иконка 24×24",
+                Mathf.Abs(IconButtonSize - 24f) < 0.01f, "IconButtonSize = " + IconButtonSize);
+            failures += Check(sb, "глиф кнопки-иконки = 24 · GlyphRatio",
+                Mathf.Abs(IconButtonSize * GlyphRatio - IconButtonSize * 0.78f) < 0.01f,
+                IconButtonSize + " · " + GlyphRatio + " = " + (IconButtonSize * GlyphRatio).ToString("0.0"));
+            failures += Check(sb, "кнопка с текстом высотой 24",
+                Mathf.Abs(TextButtonHeight - 24f) < 0.01f, "TextButtonHeight = " + TextButtonHeight);
+            failures += Check(sb, "отступ кнопки с текстом 6 px",
+                Mathf.Abs(ButtonPadding - 6f) < 0.01f, "ButtonPadding = " + ButtonPadding);
+            failures += Check(sb, "высота вкладки в диапазоне 24…28",
+                TabHeight >= 24f && TabHeight <= 28f, "TabHeight = " + TabHeight);
+            failures += Check(sb, "вкладка выше кнопки-иконки",
+                TabHeight > IconButtonSize, TabHeight + " > " + IconButtonSize);
+            failures += Check(sb, "единая ширина текстовой кнопки считается из Length · 7.6 + 16",
+                Mathf.Abs(TextButtonCharWidth - 7.6f) < 0.01f && Mathf.Abs(MinTextButtonWidth - 60f) < 0.01f,
+                "char = " + TextButtonCharWidth + " , минимум = " + MinTextButtonWidth);
+            // ФИКС 8 (§23): кнопки «раскрыть/свернуть дерево» — иконки "expand"/"collapse"
+            // («+» и «−»). Проверяем, что обе иконки есть в едином наборе (иначе кнопка
+            // осталась бы пустым квадратом, а оператор снова увидел бы «непонятные кнопки»).
+            failures += Check(sb, "иконки «+»/«−» дерева из единого набора KvIcons",
+                KvIcons.Get("expand", 18) != null && KvIcons.Get("collapse", 18) != null,
+                "KvIcons.Get(\"expand\") и Get(\"collapse\") != null");
+
+            sb.Append("Проверок: 13 · провалов: ").Append(failures);
+            return sb.ToString();
+        }
+
+        private static int Check(StringBuilder sb, string what, bool ok, string detail)
+        {
+            sb.Append(ok ? "  [OK]   " : "  [FAIL] ").Append(what).Append(" — ").Append(detail).Append('\n');
+            return ok ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Сколько проверок эталона ПРОВАЛЕНО — короткий ответ для диагностики, тестов и
+        /// автопрогона (сам отчёт целиком отдаёт <see cref="ValidateSizes"/>).
+        /// ФИКС 6/8 (§23): в §22 метод был написан, но НЕ ВЫЗЫВАЛСЯ НИ ОТКУДА (§22.14 п.2) —
+        /// теперь он вызывается диагностикой и при старте интерфейса, поэтому эталон
+        /// подтверждается при каждом прогоне.
+        /// </summary>
+        public static int ValidateSizesFailures()
+        {
+            int failures = 0;
+            string[] lines = ValidateSizes().Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+                if (lines[i].StartsWith("  [FAIL]")) failures++;
+            return failures;
         }
     }
 

@@ -19,10 +19,13 @@ namespace KazistovVvFeatures
         public bool applied;
 
         /// <summary>
-        /// Метрики, с которыми сравнивается результат: перепараметризованный по лимитам
-        /// вариант того же пути. Так сравнение честное — планировщик отдаёт путь с
-        /// ПОСТОЯННОЙ скоростью внутри сегментов (нулевые ускорение и рывок, но мгновенные
-        /// скачки скорости в узлах), поэтому «до» по сырому плану всегда выглядит нулевым.
+        /// Метрики, с которыми сравнивается результат: тот же путь, время пересчитано по лимитам.
+        ///
+        /// ПОЧЕМУ ЭТО ВСЁ ЕЩЁ НУЖНО (ФИКС 2 §20 это не отменяет): до §20 планировщик отдавал
+        /// путь с ПОСТОЯННОЙ скоростью внутри сегментов (нулевые ускорение и рывок, но мгновенные
+        /// скачки скорости в узлах), поэтому «до» по сырому плану выглядело нулевым. Теперь
+        /// планировщик сам строит S-профиль, и `baseline` совпадает с ним по времени — сравнение
+        /// остаётся честным: оно показывает выигрыш ОТ ФОРМЫ пути (сглаживания), а не от пересчёта.
         /// </summary>
         public KvTrajStats Reference { get { return baseline.valid ? baseline : before; } }
 
@@ -80,12 +83,18 @@ namespace KazistovVvFeatures
         public const string LevelPrefsKey = "KazistovVv.Post.SmoothLevel";
         public const string MethodPrefsKey = "KazistovVv.Post.SmoothMethod";
         public const string AutoPrefsKey = "KazistovVv.Post.SmoothAuto";
+        /// <summary>ФИКС 7: «сглаживать только выбранный вариант» (0/1).</summary>
+        public const string AutoSelectedPrefsKey = "KazistovVv.Post.SmoothAutoSelected";
+        /// <summary>ФИКС 3 (§20): «сглаживать только изломы» (0/1).</summary>
+        public const string CornersOnlyPrefsKey = "KazistovVv.Post.SmoothCornersOnly";
 
         public event Action<string> Message;
 
         private float level = 60f;
         private KvSmoothMethod method = KvSmoothMethod.BSpline;
         private bool auto = true;
+        private bool autoSelectedOnly;      // ФИКС 7 (по умолчанию выключено — как было)
+        private bool cornersOnly;           // ФИКС 3 §20 (по умолчанию выключено — как было)
         private bool loaded;
 
         private TrajectoryFlowController flow;
@@ -140,6 +149,63 @@ namespace KazistovVvFeatures
             }
         }
 
+        /// <summary>
+        /// ФИКС 7. «Сглаживать ТОЛЬКО выбранный вариант»: в авторежиме сглаживание применяется
+        /// к тому варианту, который выбрал оператор, а не ко всем восьми сразу. По умолчанию
+        /// ВЫКЛЮЧЕНО — поведение остаётся прежним (обрабатываются все 8). Значение хранится
+        /// в PlayerPrefs.
+        /// </summary>
+        public bool AutoSelectedOnly
+        {
+            get { Load(); return autoSelectedOnly; }
+            set
+            {
+                Load();
+                autoSelectedOnly = value;
+                PlayerPrefs.SetInt(AutoSelectedPrefsKey, autoSelectedOnly ? 1 : 0);
+                PlayerPrefs.Save();
+                appliedSignature = "";        // режим сменился — пересчитать под новый режим
+            }
+        }
+
+        /// <summary>
+        /// ФИКС 3 (§20). «ТОЧЕЧНО СГЛАЖИВАТЬ ИЗЛОМЫ»: сглаживание применяется только
+        /// к участкам с изломом пути (угол между соседними сегментами больше
+        /// <see cref="KvTrajMath.SharpCornerDeg"/>), остальной путь остаётся как у планировщика.
+        /// По умолчанию ВЫКЛЮЧЕНО — поведение прежнее (сглаживается весь путь).
+        /// </summary>
+        public bool CornersOnly
+        {
+            get { Load(); return cornersOnly; }
+            set
+            {
+                Load();
+                cornersOnly = value;
+                PlayerPrefs.SetInt(CornersOnlyPrefsKey, cornersOnly ? 1 : 0);
+                PlayerPrefs.Save();
+                previewKey = "";              // режим сменился — пересчитать предпросмотр
+            }
+        }
+
+        /// <summary>Порог излома для подсветки и точечного сглаживания, градусы.</summary>
+        public float CornerThresholdDeg = KvTrajMath.SharpCornerDeg;
+
+        /// <summary>Индексы сэмплов-изломов последней проверки (ФИКС 3).</summary>
+        public int[] LastSharpCorners { get; private set; } = new int[0];
+        /// <summary>Самый острый излом последней проверки, градусы.</summary>
+        public float LastSharpAngleDeg { get; private set; }
+        /// <summary>Была ли уже выдана подсказка «сгладьте излом» для текущей точки.</summary>
+        private string cornersWarnedSignature = "";
+        /// <summary>Подпись состояния, для которого изломы уже искали (ФИКС 3).</summary>
+        private string cornersCheckedSignature = "";
+
+        /// <summary>Длительность последнего автоматического сглаживания, мс (ФИКС 7, замер).</summary>
+        public float LastAutoMs { get; private set; }
+        /// <summary>Сколько вариантов обработало последнее автоматическое сглаживание.</summary>
+        public int LastAutoCount { get; private set; }
+        /// <summary>Режим последнего автоматического сглаживания (true — только выбранный).</summary>
+        public bool LastAutoSelectedOnly { get; private set; }
+
         public KvMotionLimits Limits
         {
             get { return limits; }
@@ -169,6 +235,8 @@ namespace KazistovVvFeatures
             level = Mathf.Clamp(PlayerPrefs.GetFloat(LevelPrefsKey, 60f), 0f, 100f);
             method = (KvSmoothMethod)Mathf.Clamp(PlayerPrefs.GetInt(MethodPrefsKey, 0), 0, 2);
             auto = PlayerPrefs.GetInt(AutoPrefsKey, 1) != 0;
+            autoSelectedOnly = PlayerPrefs.GetInt(AutoSelectedPrefsKey, 0) != 0;   // по умолчанию — все 8
+            cornersOnly = PlayerPrefs.GetInt(CornersOnlyPrefsKey, 0) != 0;         // по умолчанию — весь путь
         }
 
         public void Bind(TrajectoryFlowController controller, CollisionWorld collisionWorld,
@@ -267,7 +335,18 @@ namespace KazistovVvFeatures
             KvSmoothEntry entry = EntryOf(candidate);
             PlannedTrajectory basis = entry != null && entry.original != null ? entry.original : candidate.plan;
 
-            double[][] path = KvTrajMath.Smooth(basis.Path, Method, Level / 100f);
+            // ФИКС 3 (§20): точечный режим — сглаживаем ТОЛЬКО окрестности изломов, найденных
+            // в нормированном пространстве суставов. Полный режим (по умолчанию) — как раньше.
+            double[][] path;
+            if (CornersOnly)
+            {
+                int[] corners = KvTrajMath.FindSharpCorners(flow.Validator, basis, CornerThresholdDeg);
+                path = KvTrajMath.SmoothCorners(basis.Path, corners, Method, Level / 100f);
+            }
+            else
+            {
+                path = KvTrajMath.Smooth(basis.Path, Method, Level / 100f);
+            }
             PlannedTrajectory draft = KvTrajMath.Clone(basis, basis.Label);
             draft.Path = path;
             PlannedTrajectory result = KvTrajMath.Retime(flow.Validator, draft, limits, 1f, 1f,
@@ -304,6 +383,52 @@ namespace KazistovVvFeatures
         }
 
         private bool quietWarned;
+
+        /// <summary>
+        /// ФИКС 3 (§20). ПОИСК ИЗЛОМОВ у текущего (выбранного, иначе первого) варианта.
+        /// Обновляет <see cref="LastSharpCorners"/> и <see cref="LastSharpAngleDeg"/> для интерфейса
+        /// и ОДИН РАЗ на точку сообщает оператору, что участок стоит сгладить.
+        ///
+        /// Геометрия пути здесь НЕ правится: метод только сообщает о проблемном участке
+        /// и предлагает инструмент (вкладка «Сглаживание траектории», опция «только изломы»).
+        /// Излом — это следствие формы пути (признак §14.10/§16.1): предел скорости вдоль пути
+        /// в такой точке близок к нулю, поэтому траектория получается медленной.
+        /// </summary>
+        public int DetectCorners()
+        {
+            LastSharpCorners = new int[0];
+            LastSharpAngleDeg = 0f;
+            if (flow == null || flow.State == null || flow.State.candidates.Count == 0) return 0;
+            if (flow.Validator == null || !flow.Validator.Ready) return 0;
+
+            int index;
+            TrajectoryCandidate candidate = KvVariantKit.Selected(flow, out index);
+            if (candidate == null) candidate = flow.State.candidates[0];
+            if (candidate == null || candidate.plan == null) return 0;
+
+            KvSmoothEntry entry = EntryOf(candidate);
+            PlannedTrajectory basis = entry != null && entry.original != null ? entry.original : candidate.plan;
+
+            LastSharpCorners = KvTrajMath.FindSharpCorners(flow.Validator, basis, CornerThresholdDeg);
+            LastSharpAngleDeg = KvTrajMath.MaxCornerDeg(flow.Validator, basis);
+            if (LastSharpCorners.Length == 0) return 0;
+
+            // Ключ подсказки — фаза + точка + число вариантов (уровень/метод сюда НЕ входят:
+            // смена ползунка не должна повторять одно и то же сообщение).
+            string warnKey = flow.State.phase + "|" + flow.State.candidates.Count + "|" +
+                             flow.State.point.x.ToString("0.000") + "," +
+                             flow.State.point.y.ToString("0.000") + "," +
+                             flow.State.point.z.ToString("0.000");
+            if (cornersWarnedSignature != warnKey)
+            {
+                cornersWarnedSignature = warnKey;
+                Report(KvLocExtra.F("smooth.corners.suggest",
+                    "Излом пути {0}° (участков: {1}) — такой участок стоит сгладить: " +
+                    "вкладка «Сглаживание траектории», опция «только изломы»",
+                    LastSharpAngleDeg.ToString("0"), LastSharpCorners.Length));
+            }
+            return LastSharpCorners.Length;
+        }
 
         /// <summary>Отчёт о фактическом рывке последнего сглаженного пути (ФИКС 1).</summary>
         public string LastJerkReport { get; private set; } = "";
@@ -427,20 +552,40 @@ namespace KazistovVvFeatures
                 for (int i = 0; i < prune.Count; i++) entries.Remove(prune[i]);
             }
 
-            if (!Auto || Level <= 0.5f) return;
             if (!KvVariantKit.Ready(flow)) return;
 
             string signature = Signature();
+
+            // ФИКС 3 (§20): изломы ищем ДО выхода по авторежиму — подсказка «участок стоит
+            // сгладить» нужна как раз тогда, когда сглаживание выключено. Стоимость — один
+            // проход по сэмплам и только при смене состояния сцены.
+            if (signature != cornersCheckedSignature)
+            {
+                cornersCheckedSignature = signature;
+                DetectCorners();
+            }
+
+            if (!Auto || Level <= 0.5f) return;
             if (signature == appliedSignature) return;
             appliedSignature = signature;
 
-            int done = ApplyAll(true);
+            // ФИКС 7. Замер стоимости автосглаживания: видно, сколько миллисекунд ушло на
+            // обработку и сколько вариантов она затронула. Режим «только выбранный» касается
+            // ОДНОГО варианта вместо восьми — разница в этой строке и видна.
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            int done = autoSelectedOnly ? (ApplySelected(true) ? 1 : 0) : ApplyAll(true);
+            watch.Stop();
+
+            LastAutoMs = (float)watch.Elapsed.TotalMilliseconds;
+            LastAutoCount = done;
+            LastAutoSelectedOnly = autoSelectedOnly;
             appliedCount += done;
             if (done > 0)
                 Report(KvLocExtra.T("smooth.auto.on",
                            "Автоматическое сглаживание включено: новая точка — сразу сглаженные варианты") +
-                       " → вариантов " + done + ", метод " + MethodLabel + ", уровень " +
-                       Level.ToString("0") + " %");
+                       " → вариантов " + done + (autoSelectedOnly ? " (только выбранный)" : " (все)") +
+                       ", метод " + MethodLabel + ", уровень " +
+                       Level.ToString("0") + " % · " + LastAutoMs.ToString("0.0") + " мс");
         }
 
         /// <summary>Подпись «какие варианты уже обработаны» (точка + число вариантов + фаза).</summary>
@@ -448,9 +593,12 @@ namespace KazistovVvFeatures
         {
             if (flow == null || flow.State == null) return "";
             SelectionState s = flow.State;
+            // ФИКС 7: в режиме «только выбранный» номер выбранного варианта входит в подпись —
+            // иначе смена выбора не запускала бы сглаживание нового варианта.
             return s.phase + "|" + s.candidates.Count + "|" +
                    s.point.x.ToString("0.000") + "," + s.point.y.ToString("0.000") + "," +
-                   s.point.z.ToString("0.000") + "|" + Level.ToString("0") + "|" + (int)Method;
+                   s.point.z.ToString("0.000") + "|" + Level.ToString("0") + "|" + (int)Method +
+                   "|" + (autoSelectedOnly ? s.selectedTrajectory.ToString() : "all");
         }
 
         /// <summary>Сбросить кэш метрик (после смены робота).</summary>
@@ -458,6 +606,10 @@ namespace KazistovVvFeatures
         {
             entries.Clear();
             appliedSignature = "";
+            cornersCheckedSignature = "";
+            cornersWarnedSignature = "";
+            LastSharpCorners = new int[0];
+            LastSharpAngleDeg = 0f;
         }
 
         private void Report(string text)
@@ -512,6 +664,45 @@ namespace KazistovVvFeatures
                     toggleValue = v;
                     service.Auto = v;
                 });
+
+            // ФИКС 7: стоимость автосглаживания. Включённая опция обрабатывает ОДИН вариант
+            // (выбранный), а не все 8 сразу — появление траекторий заметно быстрее.
+            kit.Toggle(KvLocExtra.T("smooth.auto.selected",
+                    "Сглаживать только выбранный вариант (быстрее)"),
+                service.AutoSelectedOnly, delegate (bool v) { service.AutoSelectedOnly = v; });
+
+            // ФИКС 3 (§20): точечное сглаживание изломов. Ползунок уровня при этом задаёт
+            // силу обработки, но трогается только окрестность найденных изломов.
+            kit.Toggle(KvLocExtra.T("smooth.corners.only",
+                    "Точечно сглаживать изломы (только проблемные участки)"),
+                service.CornersOnly, delegate (bool v) { service.CornersOnly = v; });
+
+            // ФИКС 3: подсветка изломов текущего варианта. Излом — это форма пути:
+            // предел скорости вдоль пути в такой точке близок к нулю, поэтому участок «вязнет».
+            kit.Info(delegate
+            {
+                int count = service.LastSharpCorners != null ? service.LastSharpCorners.Length : 0;
+                if (count == 0)
+                    return KvLocExtra.F("smooth.corners.none",
+                        "Изломов нет (порог {0}°): путь гладкий, точечное сглаживание не нужно",
+                        service.CornerThresholdDeg.ToString("0"));
+                return KvLocExtra.F("smooth.corners.found",
+                    "Изломов: {0} · самый острый {1}° (порог {2}°) — предлагается сгладить эти участки",
+                    count, service.LastSharpAngleDeg.ToString("0"),
+                    service.CornerThresholdDeg.ToString("0"));
+            }, KvTheme.Warn);
+
+            kit.Info(delegate
+            {
+                if (!service.Auto) return KvLocExtra.T("smooth.auto.off",
+                    "Автосглаживание выключено — сглаживание применяется только по кнопке.");
+                if (service.LastAutoCount <= 0) return KvLocExtra.T("smooth.auto.wait",
+                    "Ждём первую точку: после планирования здесь появится время обработки.");
+                return KvLocExtra.T("smooth.auto.cost", "Последнее автосглаживание: ") +
+                       service.LastAutoMs.ToString("0.0") + " мс · вариантов " +
+                       service.LastAutoCount +
+                       (service.LastAutoSelectedOnly ? " (только выбранный)" : " (все 8)");
+            }, KvTheme.Accent);
 
             kit.Buttons(new[]
             {
